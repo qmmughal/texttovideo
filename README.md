@@ -2,6 +2,14 @@
 
 A working Next.js/TypeScript editor with a FastAPI background worker, SQLite project/job storage, Ollama storyboards, ComfyUI visual generation, optional Piper narration, and FFmpeg MP4 assembly. Core processing uses local services. No cloud keys are required.
 
+## License
+
+The application source code is available under the [MIT License](LICENSE).
+The bundled Noto Naskh Arabic font is licensed separately under the
+[SIL Open Font License 1.1](frontend/public/fonts/OFL.txt).
+Third-party dependencies and separately downloaded models retain their own
+licenses; the MIT license does not relicense them.
+
 ## Windows quick start
 
 Install Python 3.11+ and Node.js 22+. From PowerShell in this folder:
