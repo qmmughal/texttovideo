@@ -68,6 +68,29 @@ export default function SettingsView({ settings, status, workflow, busy, setSett
           model with <code>ollama pull qwen3-vl:8b</code>. Ollama writes text only; it does not generate images or video.
           Start ComfyUI on port 8188 for visuals. Refresh connections after saving changed URLs.
         </p>
+        <div className="form-grid">
+          <label>
+            Image engine (slideshows)
+            <select value={settings.image_engine} onChange={(e) => set({ image_engine: e.target.value as Settings['image_engine'] })}>
+              <option value="cpu">Built-in · runs on CPU (OpenVINO)</option>
+              <option value="comfy">ComfyUI workflow</option>
+            </select>
+          </label>
+          {settings.image_engine === 'cpu' && (
+            <label>
+              Run images on
+              <select value={settings.cpu_image_device} onChange={(e) => set({ cpu_image_device: e.target.value })}>
+                <option value="CPU">CPU</option>
+                <option value="GPU">Intel graphics (GPU)</option>
+                <option value="NPU">Intel NPU</option>
+              </select>
+            </label>
+          )}
+        </div>
+        <p className="small muted">
+          The built-in engine draws scene images without a graphics card. Download its model from Setup check. AI video
+          clips always use the ComfyUI video workflow.
+        </p>
         {(['image_workflow', 'video_workflow'] as const).map((key) => (
           <label key={key}>
             {key === 'image_workflow' ? 'Image' : 'Video'} workflow — ComfyUI API JSON
@@ -112,6 +135,14 @@ export default function SettingsView({ settings, status, workflow, busy, setSett
           Bundled Noto Naskh Arabic works offline. You can select another Urdu-capable font. Captions use RAQM when
           available, with local Arabic shaping and bidirectional layout as a Windows fallback.
         </p>
+        <label>
+          Speech model for word timing
+          <select value={settings.whisper_size} onChange={(e) => set({ whisper_size: e.target.value as Settings['whisper_size'] })}>
+            <option value="tiny">Tiny · fastest (75 MB)</option>
+            <option value="base">Base · balanced (145 MB)</option>
+            <option value="small">Small · most accurate, slower (480 MB)</option>
+          </select>
+        </label>
         <label>
           Narration engine
           <select value={settings.tts} onChange={(e) => set({ tts: e.target.value as Settings['tts'] })}>

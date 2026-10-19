@@ -74,6 +74,29 @@ export default function ExportPanel({ project, options, locked, setOptions, upda
             </label>
           )}
         </div>
+        <div className="form-grid">
+          <label>
+            Caption style
+            <select
+              value={options.caption_style}
+              onChange={(e) =>
+                set({
+                  caption_style: e.target.value,
+                  font_size: e.target.value === 'words' ? Math.round(options.font_size * 1.5) : Math.round(options.font_size / 1.5),
+                })
+              }
+            >
+              <option value="blocks">Sentences</option>
+              <option value="words">Word-synced</option>
+            </select>
+          </label>
+          {options.caption_style === 'words' && (
+            <label>
+              Highlight
+              <input type="color" value={options.highlight} onChange={(e) => set({ highlight: e.target.value })} />
+            </label>
+          )}
+        </div>
         <label className="check">
           <input type="checkbox" checked={options.captions} onChange={(e) => set({ captions: e.target.checked })} /> Burn
           in captions
@@ -88,7 +111,7 @@ export default function ExportPanel({ project, options, locked, setOptions, upda
             <input type="color" value={options.color} onChange={(e) => set({ color: e.target.value })} />
           </label>
         </div>
-        <label>
+        {options.caption_style === 'blocks' && <label>
           Characters per caption · {options.caption_chars}
           <input
             type="range"
@@ -98,7 +121,7 @@ export default function ExportPanel({ project, options, locked, setOptions, upda
             value={options.caption_chars}
             onChange={(e) => set({ caption_chars: +e.target.value })}
           />
-        </label>
+        </label>}
         <label>
           Caption position {Math.round(options.caption_y * 100)}%
           <input
@@ -152,7 +175,7 @@ export default function ExportPanel({ project, options, locked, setOptions, upda
         <p className="muted small">
           H.264 · AAC · 30 fps
           <br />
-          Long captions are split into timed cues. Narration can extend image scenes; video clips must be long enough.
+          Word-synced captions follow the narration (exact with Windows voices). Sentence captions split long text into cues. Narration can extend image scenes; video clips must be long enough.
         </p>
       </fieldset>
     </div>

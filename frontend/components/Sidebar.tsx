@@ -4,11 +4,12 @@ type Props = {
   tab: string;
   locked: boolean;
   status: Status | null;
+  setupDone: boolean;
   onTab: (tab: string) => void;
   onNew: () => void;
 };
 
-export default function Sidebar({ tab, locked, status, onTab, onNew }: Props) {
+export default function Sidebar({ tab, locked, status, setupDone, onTab, onNew }: Props) {
   return (
     <aside>
       <a className="brand" onClick={() => onTab('dashboard')}>
@@ -21,6 +22,10 @@ export default function Sidebar({ tab, locked, status, onTab, onNew }: Props) {
         </button>
         <button className={tab === 'wizard' ? 'selected' : ''} disabled={locked} onClick={onNew}>
           ＋ <span>Create a video</span>
+        </button>
+        <button className={tab === 'setup' ? 'selected' : ''} onClick={() => onTab('setup')}>
+          ✓ <span>Setup check</span>
+          {!setupDone && <i className="badge" aria-label="Setup incomplete" />}
         </button>
         <button className={tab === 'settings' ? 'selected' : ''} onClick={() => onTab('settings')}>
           ⚙ <span>Models & settings</span>
