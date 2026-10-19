@@ -2,13 +2,22 @@
 
 All notable changes to Frame. Versions follow [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 1.3.0 — 2026-10-20
 
-- Acceptable-use policy ([ACCEPTABLE_USE.md](ACCEPTABLE_USE.md)): Frame refuses hateful, abusive, discriminatory, or harmful content, including content that demeans people for their religion or belief. A local model reviews requests and generated text, with a brief refusal and a safe alternative. Setup check warns when the reviewer model is too small, and a safety reviewer can be chosen in settings.
+### Safety
 
-- Documentation: new README with screenshots, CONTRIBUTING, SECURITY, and this changelog.
-- Fixed: project cards mixed English and Urdu text in the wrong order.
-- Fixed: the export preview showed a black box until played; it now opens on a frame after the fade-in.
+- Acceptable-use policy ([ACCEPTABLE_USE.md](ACCEPTABLE_USE.md)): Frame refuses hateful, abusive, discriminatory, or harmful content, including content that demeans people for their religion or belief, and content promoting violence, harassment, or dehumanization. A local model reviews requests and generated text and answers a violation with a brief refusal and a safe alternative. Respectful religious content is welcome.
+- The larger of the story and vision models reviews by default; a safety reviewer can be chosen in settings, and Setup check warns when the reviewer is too small to be reliable.
+- Refused jobs show as "refused" without a retry button.
+
+### Documentation
+
+- New README with screenshots and rendered frames, plus CONTRIBUTING, SECURITY, and this changelog.
+
+### Fixes
+
+- Project cards mixed English and Urdu text in the wrong order.
+- The export preview showed a black box until played; it now opens on a frame after the fade-in.
 
 ## 1.2.0 — 2026-10-20
 
