@@ -2,11 +2,12 @@ $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
 function Find-Python {
-    foreach ($candidate in @('py -3.13', 'py -3.12', 'py -3.11', 'python', 'python3')) {
+    foreach ($candidate in @('py -3.13', 'py -3.12', 'py -3.11', 'py -3', 'python', 'python3')) {
         $parts = $candidate.Split(' ')
         try {
-            $version = & $parts[0] @($parts[1..9] | Where-Object { $_ }) -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>$null
-            if ($LASTEXITCODE -eq 0 -and [version]$version -ge [version]'3.11') { return $parts }
+            # No quotes inside -c: Windows PowerShell 5.1 strips them from native command arguments.
+            $version = & $parts[0] @($parts[1..9] | Where-Object { $_ }) -c 'import sys; print(sys.version_info[0] * 100 + sys.version_info[1])' 2>$null
+            if ($LASTEXITCODE -eq 0 -and [int]$version -ge 311) { return $parts }
         } catch {}
     }
     throw 'Python 3.11 or newer was not found. Install it from https://www.python.org/downloads/ and run setup again.'

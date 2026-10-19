@@ -5,7 +5,7 @@ Set-Location $app
 Write-Host 'Setting up Frame. This downloads Python packages once and can take a few minutes.'
 
 function Test-Python {
-    foreach ($candidate in @('py -3.13', 'py -3.12', 'py -3.11', 'python')) {
+    foreach ($candidate in @('py -3.13', 'py -3.12', 'py -3.11', 'py -3', 'python')) {
         $parts = $candidate.Split(' ')
         try {
             $ok = & $parts[0] @($parts[1..9] | Where-Object { $_ }) -c 'import sys; print(sys.version_info >= (3, 11))' 2>$null
