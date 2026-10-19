@@ -68,7 +68,7 @@ export default function Dashboard({ projects, busy, onNew, onOpen, onDuplicate, 
                 <div className="project-info">
                   <b dir="auto">{p.title}</b>
                   <p>
-                    {p.scenes.length} scenes · {p.duration}s · {p.language === 'ur' ? 'اردو' : 'English'}
+                    {p.scenes.length} scenes · {p.duration}s · <bdi>{p.language === 'ur' ? 'اردو' : 'English'}</bdi>
                     {p.exports.length > 0 && ` · ${p.exports.length} export${p.exports.length > 1 ? 's' : ''}`}
                   </p>
                 </div>
@@ -78,7 +78,7 @@ export default function Dashboard({ projects, busy, onNew, onOpen, onDuplicate, 
                   Duplicate
                 </button>
                 <button disabled={busy || !p.scenes.length} onClick={() => onTranslate(p)}>
-                  {p.language === 'ur' ? 'English copy' : 'اردو copy'}
+                  {p.language === 'ur' ? 'English copy' : <>Copy in <bdi>اردو</bdi></>}
                 </button>
                 <button disabled={busy} className="danger" onClick={() => onDelete(p)}>
                   Delete
