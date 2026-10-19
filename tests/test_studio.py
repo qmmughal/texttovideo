@@ -13,7 +13,9 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from backend import integrations, media, store
+import httpx
+
+from backend import cpu_images, integrations, media, store, system, words
 from backend.main import app
 from backend.models import Export, Project, Scene, Settings
 
@@ -117,8 +119,9 @@ def test_narration_extends_image(project):
 
 
 def test_urdu_shaping():
-    result = media.caption_png("یہ ایک خوبصورت نئی کہانی ہے", "ur", Export(width=540, height=960, font_size=42), Settings().font)
-    assert Image.open(store.asset_path(result)).getbbox() is not None
+    name, x, y = media.caption_png("یہ ایک خوبصورت نئی کہانی ہے", "ur", Export(width=540, height=960, font_size=42), Settings().font)
+    image = Image.open(store.asset_path(name))
+    assert image.getbbox() is not None and image.width < 540 and y > 400
 
 
 def test_no_silent_slideshow(project):
@@ -192,9 +195,11 @@ def test_describe_photos_with_vision_model(project, monkeypatch):
 def test_windows_voice_narration():
     settings = Settings(tts="windows")
     assert integrations.voice_info(settings)["available"]
-    name = integrations.narrate(Scene(id="v", text="Hello from Frame."), "en", settings, not_cancelled)
+    name, timed = integrations.narrate(Scene(id="v", text="Hello from Frame."), "en", settings, not_cancelled)
     info = media.probe(store.asset_path(name))
     assert info["audio"] and info["duration"] > 0.5
+    assert [w["text"] for w in timed] == ["Hello", "from", "Frame"]
+    assert all(a["start"] < b["start"] for a, b in zip(timed, timed[1:])) and timed[-1]["end"] <= info["duration"] + 0.01
     if not any(v["language"].startswith("ur") for v in integrations.windows_voices()):
         with pytest.raises(ValueError, match="Urdu"):
             integrations.narrate(Scene(id="u", text="سلام"), "ur", settings, not_cancelled)
@@ -246,3 +251,104 @@ def test_video_clips_crossfade(project):
         project, Export(width=240, height=320, transition="crossfade", fade=0.4), Settings(), no_progress, not_cancelled
     )
     assert abs(media.probe(store.asset_path(result["asset"]))["duration"] - 2) < 0.1
+
+
+def test_word_timing_helpers():
+    estimated = words.estimate("one two three", 3)
+    assert estimated[0]["start"] == 0 and abs(estimated[-1]["end"] - 3) < 0.01
+    heard = [
+        {"text": "The", "start": 0.1, "end": 0.3},
+        {"text": "son", "start": 0.3, "end": 0.6},
+        {"text": "rises", "start": 0.6, "end": 1.0},
+        {"text": "today", "start": 1.4, "end": 1.9},
+    ]
+    aligned = words.align("The sun rises slowly today", heard)
+    assert [w["text"] for w in aligned] == ["The", "sun", "rises", "slowly", "today"]
+    assert aligned[3]["start"] == 1.0 and aligned[3]["end"] == 1.4 and aligned[4]["start"] == 1.4
+    groups = words.phrases(words.estimate("Hello there. This is a longer sentence that needs splitting", 6))
+    assert [w["text"] for w in groups[0]] == ["Hello", "there."]
+    assert all(len(" ".join(w["text"] for w in g)) <= 22 or len(g) == 1 for g in groups)
+    events = [{"start": 0.1, "at": 0, "length": 5}, {"start": 0.6, "at": 6, "length": 5}]
+    assert integrations.speech_words("Hello world", events, 1.2) == [
+        {"text": "Hello", "start": 0.1, "end": 0.6},
+        {"text": "world", "start": 0.6, "end": 1.2},
+    ]
+
+
+@pytest.mark.parametrize("language", ["en", "ur"])
+def test_word_synced_render(project, language):
+    write_silence("speech.wav", 1.5)
+    scene = project.scenes[0]
+    scene.text = "Every story starts with a little light" if language == "en" else "ہر کہانی تھوڑی سی روشنی سے شروع ہوتی ہے"
+    scene.narration = "speech.wav"
+    scene.words = words.estimate(scene.text, 1.5)
+    scene.words_for = "speech.wav"
+    project.language = language
+    project.scenes = [scene]
+    options = Export(width=240, height=320, font_size=24, caption_style="words")
+    result = media.render(project, options, Settings(), no_progress, not_cancelled)
+    srt = store.asset_path(result["srt"]).read_text(encoding="utf-8")
+    assert srt.count("-->") >= 2 and srt.startswith("1\n00:00:00,000")
+    ok, error = decodes_cleanly(result["asset"])
+    assert ok, error
+
+
+def test_highlighted_phrase_image():
+    options = Export(width=360, height=640, font_size=30, highlight="#ff0000")
+    name, x, y = media.phrase_png(["Make", "it", "move"], 2, options, Settings().font)
+    colors = {c[:3] for _, c in Image.open(store.asset_path(name)).convert("RGBA").getcolors(100000) if c[3] == 255}
+    assert (255, 0, 0) in colors and (255, 255, 255) in colors and x > 0
+
+
+@pytest.mark.parametrize(
+    "ram, gpus, tier, model",
+    [(6, [], "Light", "qwen3:1.7b"), (12, [], "Standard (CPU)", "qwen3:4b"),
+     (32, [], "Strong (CPU)", "qwen3:8b"), (32, [{"name": "RTX", "vram_gb": 12}], "GPU", "qwen3:8b")],
+)
+def test_recommendations(ram, gpus, tier, model):
+    plan = system.recommend({"ram_gb": ram, "nvidia": gpus})
+    assert plan["name"] == tier and plan["text_model"][0] == model and plan["video"] == bool(gpus)
+
+
+def test_image_model_download(monkeypatch):
+    files = {"model_index.json": b"{}", "unet/openvino_model.bin": b"x" * 3000, "safety_checker/model.bin": b"big"}
+
+    def handler(request):
+        if "/api/models/" in request.url.path:
+            return httpx.Response(200, json=[{"type": "directory", "path": "unet"}] + [
+                {"type": "file", "path": k, "size": len(v)} for k, v in files.items()])
+        return httpx.Response(200, content=files[request.url.path.split("/resolve/main/")[1]])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    assert not cpu_images.is_downloaded("lcm-dreamshaper")
+    with pytest.raises(ValueError, match="not downloaded"):
+        cpu_images.generate("a hill", "Cinematic", Settings(), not_cancelled, no_progress)
+    with pytest.raises(RuntimeError, match="Cancelled"):
+        cpu_images.download("lcm-dreamshaper", lambda: True, no_progress, client)
+    cpu_images.download("lcm-dreamshaper", not_cancelled, no_progress, client)
+    folder = cpu_images.model_dir("lcm-dreamshaper")
+    assert (folder / "unet/openvino_model.bin").stat().st_size == 3000 and cpu_images.is_downloaded("lcm-dreamshaper")
+    assert not (folder / "safety_checker").exists()
+    assert cpu_images.size_for(9 / 16) == (512, 768) and cpu_images.size_for(16 / 9) == (768, 512)
+
+
+def test_setup_api_and_align_job(project, monkeypatch):
+    write_silence("talk.wav", 1)
+    monkeypatch.setattr(words, "transcribe", lambda path, language, size: [
+        {"text": "hello", "start": 0.1, "end": 0.4}, {"text": "world", "start": 0.5, "end": 0.9}])
+    with TestClient(app) as client:
+        setup = client.get("/api/setup").json()
+        assert {"hardware", "plan", "ollama", "images", "words"} <= setup.keys()
+        assert setup["hardware"]["threads"] >= 1 and setup["plan"]["text_model"][0]
+        assert client.post("/api/setup/jobs/format_disk", json={}).status_code == 400
+        assert client.post("/api/setup/jobs/image_model", json={"key": "../../evil"}).status_code == 400
+        scenes = [{"id": "s", "asset": "test.png", "narration": "talk.wav", "text": ""}]
+        p = client.post("/api/projects", json={"scenes": scenes}).json()
+        job = client.post(f'/api/projects/{p["id"]}/jobs/align', json={}).json()
+        for _ in range(100):
+            if store.get("job", job["id"])["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.05)
+        assert store.get("job", job["id"])["status"] == "completed"
+        scene = client.get(f'/api/projects/{p["id"]}').json()["scenes"][0]
+        assert scene["text"] == "hello world" and scene["words_for"] == "talk.wav" and scene["words"][1]["start"] == 0.5

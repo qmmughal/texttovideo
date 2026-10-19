@@ -11,13 +11,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 
-from . import integrations, media, store
+from . import cpu_images, integrations, media, store, system, words
 from .models import Export, Project, Settings
 
 FRONTEND_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
 TRUSTED_ORIGINS = (*FRONTEND_ORIGINS, "http://localhost:8000", "http://127.0.0.1:8000")
 MEDIA_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm", ".wav", ".mp3", ".m4a", ".ogg")
-JOB_KINDS = ("storyboard", "describe", "visuals", "narration", "render")
+JOB_KINDS = ("storyboard", "describe", "visuals", "narration", "align", "render")
+SETUP_KINDS = ("ollama_model", "image_model", "whisper_model")
+SYSTEM = "__system__"
 
 pool = ThreadPoolExecutor(max_workers=1)
 lock = threading.RLock()
@@ -108,6 +110,74 @@ def status():
         for model in result["ollama"]["data"].get("models", []):
             model["capabilities"] = integrations.capabilities(s, model["name"])
     return result
+
+
+@app.get("/api/setup")
+def setup():
+    s = settings()
+    current = status()
+    hw = system.hardware()
+    plan = system.recommend(hw)
+    models = [m["name"] for m in current["ollama"].get("data", {}).get("models", [])] if current["ollama"]["online"] else []
+    return {
+        "hardware": hw,
+        "plan": plan,
+        "ollama": {"state": system.ollama_state(current["ollama"]), "models": models},
+        "voice": current["voice"],
+        "images": {
+            "engine": s.image_engine,
+            "openvino": cpu_images.available(),
+            "models": cpu_images.model_status(),
+            "comfy": current["comfy"]["online"],
+        },
+        "words": {
+            "whisper": words.whisper_available(),
+            "size": s.whisper_size,
+            "downloaded": words.whisper_downloaded(s.whisper_size),
+        },
+        "settings": {"model": s.model, "vision_model": s.vision_model, "tts": s.tts},
+    }
+
+
+@app.post("/api/setup/jobs/{kind}")
+def start_setup_job(kind: str, options: dict):
+    if kind not in SETUP_KINDS:
+        raise HTTPException(400, "Unknown setup task")
+    if kind == "ollama_model" and not str(options.get("model", "")).strip():
+        raise ValueError("Choose a model to install")
+    if kind == "image_model" and options.get("key") not in cpu_images.CATALOG:
+        raise ValueError("Unknown image model")
+    with lock:
+        if any(j["project"] == SYSTEM and j["status"] in ("queued", "running") for j in store.all_docs("job")):
+            raise HTTPException(409, "Another download is running. Wait for it to finish.")
+        job = {
+            "id": store.uid(), "project": SYSTEM, "kind": kind, "options": options, "scene": None,
+            "status": "queued", "stage": "Waiting for local worker", "progress": 0, "cancel": False,
+        }
+        store.put("job", job["id"], job)
+        pool.submit(execute, job["id"])
+    return job
+
+
+def run_setup_job(job, s, cancelled, progress):
+    options = job["options"]
+    if job["kind"] == "ollama_model":
+        model = options["model"].strip()
+        system.pull(s, model, cancelled, progress)
+        field = "vision_model" if options.get("role") == "vision" else "model"
+        latest = settings()
+        setattr(latest, field, model)
+        store.put("settings", "local", latest.model_dump())
+    elif job["kind"] == "image_model":
+        cpu_images.download(options["key"], cancelled, progress)
+        latest = settings()
+        latest.image_engine, latest.cpu_image_model = "cpu", options["key"]
+        store.put("settings", "local", latest.model_dump())
+    elif job["kind"] == "whisper_model":
+        if not words.whisper_available():
+            raise ValueError("faster-whisper is not installed. Run setup again.")
+        progress(f"Downloading the {s.whisper_size} speech model", None)
+        words.whisper_model(s.whisper_size)
 
 
 # --- Projects ---------------------------------------------------------------
@@ -240,13 +310,22 @@ def execute(key):
     try:
         if cancelled():
             raise RuntimeError("Cancelled")
-        project = Project(**store.get("project", job["project"]))
         s = settings()
+        if job["project"] == SYSTEM:
+            run_setup_job(job, s, cancelled, progress)
+            with lock:
+                current = store.get("job", key)
+                current.update(status="completed", stage="Complete", progress=100)
+                store.put("job", key, current)
+            return
+        project = Project(**store.get("project", job["project"]))
         progress("Starting " + job["kind"], 0)
         if job["kind"] == "storyboard":
             project = integrations.storyboard(project, s)
         elif job["kind"] == "describe":
             project = integrations.describe_photos(project, s, cancelled, progress, job.get("scene"))
+        elif job["kind"] == "align":
+            align_scenes(project, s, job.get("scene"), cancelled, progress)
         elif job["kind"] in ("visuals", "narration"):
             scenes = [v for v in project.scenes if not job.get("scene") or v.id == job["scene"]]
             if not scenes:
@@ -258,11 +337,16 @@ def execute(key):
                 if job["kind"] == "visuals":
                     if scene.asset and not job.get("scene"):
                         continue
-                    scene.asset = integrations.generate_visual(scene, project.mode, s, cancelled, progress)
+                    if s.image_engine == "cpu" and project.mode == "slideshow":
+                        aspect = float(job["options"].get("aspect") or 1)
+                        scene.asset = cpu_images.generate(scene.prompt, project.style, s, cancelled, progress, aspect)
+                    else:
+                        scene.asset = integrations.generate_visual(scene, project.mode, s, cancelled, progress)
                 else:
                     if (scene.narration or not scene.text.strip()) and not job.get("scene"):
                         continue
-                    scene.narration = integrations.narrate(scene, project.language, s, cancelled)
+                    scene.narration, scene.words = integrations.narrate(scene, project.language, s, cancelled)
+                    scene.words_for = scene.narration if scene.words else ""
                 if cancelled():
                     raise RuntimeError("Cancelled")
                 store.put("project", project.id, project.model_dump())
@@ -281,6 +365,25 @@ def execute(key):
             current = store.get("job", key)
             current.update(status="cancelled" if cancelled() else "failed", stage=str(exc))
             store.put("job", key, current)
+
+
+def align_scenes(project, s, only_scene, cancelled, progress):
+    """Time every word of the narration with Whisper; fills empty captions from what was said."""
+    targets = [v for v in project.scenes if v.narration and (not only_scene or v.id == only_scene)]
+    if not targets:
+        raise ValueError("Add or generate narration first; word timing follows the narration audio.")
+    for index, scene in enumerate(targets):
+        if cancelled():
+            raise RuntimeError("Cancelled")
+        if scene.words and scene.words_for == scene.narration and not only_scene:
+            continue
+        progress(f"Listening to scene {index + 1}/{len(targets)}", index / len(targets) * 100)
+        recognized = words.transcribe(store.asset_path(scene.narration), project.language, s.whisper_size)
+        if not scene.text.strip():
+            scene.text = " ".join(w["text"] for w in recognized)[:3000]
+        scene.words = words.align(scene.text, recognized)
+        scene.words_for = scene.narration
+        store.put("project", project.id, project.model_dump())
 
 
 @app.post("/api/projects/{key}/jobs/{kind}")

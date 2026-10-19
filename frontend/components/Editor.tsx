@@ -9,6 +9,7 @@ type Props = {
   locked: boolean;
   dirty: boolean;
   canDescribe: boolean;
+  canAlign: boolean;
   update: (value: Partial<Project>) => void;
   setOptions: (value: ExportOptions) => void;
   setPreview: (asset: string) => void;
@@ -18,7 +19,7 @@ type Props = {
 };
 
 export default function Editor(props: Props) {
-  const { project, options, preview, locked, dirty, canDescribe, update, onJob, onUpload } = props;
+  const { project, options, preview, locked, dirty, canDescribe, canAlign, update, onJob, onUpload } = props;
   const total = project.scenes.reduce((sum, s) => sum + s.duration, 0);
   const photos = project.scenes.filter((s) => isImage(s.asset)).length;
 
@@ -63,6 +64,9 @@ export default function Editor(props: Props) {
               <button onClick={() => onJob('visuals')}>✧ Generate missing visuals</button>
               {canDescribe && photos > 0 && <button onClick={() => onJob('describe')}>✎ Describe uncaptioned photos</button>}
               <button onClick={() => onJob('narration')}>♫ Generate missing voices</button>
+              {canAlign && project.scenes.some((s) => s.narration && s.words_for !== s.narration) && (
+                <button onClick={() => onJob('align')}>⏱ Time captions to voice</button>
+              )}
               <button onClick={() => update({ scenes: [...project.scenes, newScene()] })}>＋ Scene</button>
             </div>
             {project.scenes.map((s, i) => (

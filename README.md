@@ -6,26 +6,58 @@ A working Next.js/TypeScript editor with a FastAPI background worker, SQLite pro
 
 ## Highlights
 
+- **Works without a graphics card:** a setup check sizes models to your computer, and AI images can be drawn on the CPU.
 - **Idea → film:** a local Ollama model writes a scene-by-scene storyboard in English or Urdu.
 - **Photos → film:** upload your photos and a local vision model (e.g. `qwen3-vl:8b`) writes narration for each one.
 - **Narration out of the box on Windows** using built-in system voices — no extra install. Piper neural voices are optional.
 - **Motion and transitions:** per-scene zoom/pan (Ken Burns), crossfade, fade-through-black, or hard cuts.
-- **Readable captions:** long scene text is split into timed cues, both burned in and in the SRT file. Full Urdu RTL shaping.
+- **Word-synced captions:** short phrases appear as they are spoken, with the current word highlighted (exact timing with Windows voices; Whisper timing for uploaded or Piper narration). Sentence captions are also available. Full Urdu RTL shaping.
 - **Exports** for Shorts/Reels, YouTube, square, and portrait, with music ducking and logo placement.
 - **Project management:** duplicate and delete projects; shared media is only removed when no project uses it.
 
 ## Which models generate video?
 
-Ollama runs language and vision models only. It has **no text-to-video models**, and its experimental image generation (Z-Image Turbo, FLUX.2 Klein) only ran on macOS/Linux and was removed in Ollama v0.32.6. Frame therefore uses Ollama for writing (storyboards, photo narration) and ComfyUI for pictures and video:
+Ollama runs language and vision models only. It has **no text-to-video models**, and its experimental image generation (Z-Image Turbo, FLUX.2 Klein) only ran on macOS/Linux and was removed in Ollama v0.32.6. Frame therefore uses Ollama for writing (storyboards, photo narration), a built-in OpenVINO engine or ComfyUI for pictures, and ComfyUI for video:
 
 | Purpose | Runs in | Good local choices |
 | --- | --- | --- |
-| Storyboard / script | Ollama | `qwen3:8b`, `llama3.2:3b` (small machines), `gemma3` |
-| Photo narration | Ollama | `qwen3-vl:8b`, `gemma3` (vision-capable models) |
-| Still images | ComfyUI | Stable Diffusion 1.5 / SDXL checkpoints, FLUX |
+| Storyboard / script | Ollama | `qwen3:8b`, `qwen3:4b` (8–16 GB RAM), `qwen3:1.7b` (under 8 GB) |
+| Photo narration | Ollama | `qwen3-vl:8b`, `qwen3-vl:4b`, `qwen3-vl:2b` (vision-capable models) |
+| Still images, no GPU | Built-in (OpenVINO) | LCM Dreamshaper v7 int8, downloaded from Setup check |
+| Still images, NVIDIA GPU | ComfyUI | Stable Diffusion 1.5 / SDXL checkpoints, FLUX |
 | Video clips | ComfyUI | Wan 2.2 (5B runs on ~8 GB VRAM), LTX-Video / LTX-2, HunyuanVideo |
 
-Video models need a capable NVIDIA GPU. Without one, use the animated slideshow mode: motion, transitions, narration and captions all run on the CPU.
+Video models need a capable NVIDIA GPU. Without one, use the animated slideshow mode: images, motion, transitions, narration and captions all run on the CPU.
+
+## Running on a computer without a graphics card
+
+Everything except AI video clips runs on an ordinary CPU. Rough timings on a typical laptop:
+
+| Step | CPU-only speed |
+| --- | --- |
+| Rendering a 30 s 1080×1920 Short (6 scenes, motion, crossfades, captions) | about 20 s on a recent laptop, a minute or two on older ones |
+| Storyboard with a 4B model | about 30–60 s |
+| One AI image (512×768, LCM, 4 steps) | about 15 s on a recent laptop CPU (measured), up to about a minute on older ones; the first image also loads the model |
+| Narration with Windows voices | a second or two per scene |
+| Word timing with the Whisper base model | a few seconds per scene |
+| AI video (Wan, LTX) | not practical: minutes to hours per clip |
+
+## Setup check
+
+Open **Setup check** in the sidebar on first run. It reads the computer's memory, CPU, free disk space, and graphics card, then recommends a tier:
+
+- **Light** (under 8 GB memory): `qwen3:1.7b` and `qwen3-vl:2b`; use your own photos for visuals.
+- **Standard (CPU)** (8–16 GB): `qwen3:4b`, `qwen3-vl:4b`, and the built-in image engine.
+- **Strong (CPU)** (16 GB or more): `qwen3:8b`, `qwen3-vl:8b`, and the built-in image engine.
+- **GPU** (NVIDIA with 8 GB or more): the 8B models plus ComfyUI for images and video.
+
+Each step has a button that downloads the model through Ollama or from Hugging Face, shows progress, can be cancelled, and resumes after an interruption. Finished downloads are selected in settings automatically. The dashboard shows a reminder until the essentials are ready.
+
+## AI images without a graphics card
+
+The built-in engine uses [OpenVINO GenAI](https://openvinotoolkit.github.io/openvino.genai/) with `OpenVINO/LCM_Dreamshaper_v7-int8-ov` (about 1 GB download, MIT licence), a pre-converted latent consistency model that needs only 4 steps per image. Download it from Setup check; it is stored in `data/models`. In **Models & settings**, choose **Built-in · runs on CPU** as the image engine and optionally run it on Intel graphics or an Intel NPU instead of the CPU.
+
+Images are drawn at 512×768, 768×512, or 512×512 to match the export shape, then scaled to the export size, so they are not high resolution. The scene's visual prompt and the project's style are combined into the image prompt. Video mode always uses the ComfyUI video workflow.
 
 ## License
 
@@ -122,7 +154,10 @@ Set the full path to that environment's `Scripts\piper.exe` and the downloaded `
 
 English and Urdu captions support size, color, vertical position, safe margins, burned-in output, and UTF-8 SRT. Noto Naskh Arabic and its SIL Open Font License are bundled in `frontend/public/fonts`. No web-font request is required. Pillow uses RAQM where available; otherwise Arabic reshaping and Unicode bidirectional ordering provide joined RTL captions on Windows. The UI uses browser text shaping. This is Naskh, not Nastaliq; advanced Nastaliq typography is best used with a RAQM-capable renderer and compatible font.
 
-Each scene has one narration asset. Long scene text is split into several caption cues (set **Characters per caption** in export settings), preferring sentence boundaries. Each cue's screen time is proportional to its length, and the SRT file uses the same cues. Cues are not word-aligned to the narration. Uploaded clip audio is intentionally replaced by the narration/music mix; upload any dialogue you want to preserve as narration.
+Choose **Caption style** in export settings:
+
+- **Word-synced:** short phrases of up to five words appear as they are spoken, with the current word in the highlight colour. Windows voices report exact word timings while speaking. For uploaded or Piper narration, download the Whisper speech model in Setup check and use **Time captions to voice**; a scene with narration but no script gets its caption filled in from what was said. Without timings, words are spread evenly over the narration. Urdu phrases are shown whole without per-word colouring, to keep letters joined.
+- **Sentences:** each scene has one narration asset. Long scene text is split into several caption cues (set **Characters per caption** in export settings), preferring sentence boundaries. Each cue's screen time is proportional to its length, and the SRT file uses the same cues. Cues are not word-aligned to the narration. Uploaded clip audio is intentionally replaced by the narration/music mix; upload any dialogue you want to preserve as narration.
 
 ## Rendering and editing
 

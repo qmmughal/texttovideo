@@ -8,6 +8,8 @@ export type Scene = {
   asset: string;
   narration: string;
   motion: Motion;
+  words?: { text: string; start: number; end: number }[];
+  words_for?: string;
 };
 
 export type Output = {
@@ -40,6 +42,10 @@ export type Settings = {
   comfy: string;
   model: string;
   vision_model: string;
+  image_engine: 'comfy' | 'cpu';
+  cpu_image_model: string;
+  cpu_image_device: string;
+  whisper_size: 'tiny' | 'base' | 'small';
   image_workflow: object;
   video_workflow: object;
   clip_seconds: number;
@@ -59,6 +65,7 @@ export type Job = {
   status: string;
   stage: string;
   progress: number;
+  options?: Record<string, unknown>;
 };
 
 export type ExportOptions = {
@@ -74,6 +81,8 @@ export type ExportOptions = {
   transition: string;
   fade: number;
   caption_chars: number;
+  caption_style: string;
+  highlight: string;
 };
 
 export type OllamaModel = { name: string; capabilities?: string[] };
@@ -88,6 +97,35 @@ export type Status = {
   ollama: { online: boolean; data?: { models: OllamaModel[] } };
   comfy: { online: boolean; data?: { devices?: { name: string; vram_total: number }[] } };
 };
+
+export type ImageModel = { key: string; name: string; size_gb: number; license: string; downloaded: boolean };
+
+export type Setup = {
+  hardware: {
+    os: string;
+    cpu: string;
+    threads: number;
+    ram_gb: number;
+    disk_free_gb: number;
+    nvidia: { name: string; vram_gb: number }[];
+    openvino_devices: string[];
+  };
+  plan: {
+    name: string;
+    summary: string;
+    text_model: [string, number];
+    vision_model: [string, number];
+    images: 'photos' | 'cpu' | 'comfy';
+    video: boolean;
+  };
+  ollama: { state: 'running' | 'installed' | 'missing'; models: string[] };
+  voice: Status['voice'];
+  images: { engine: string; openvino: boolean; models: ImageModel[]; comfy: boolean };
+  words: { whisper: boolean; size: string; downloaded: boolean };
+  settings: { model: string; vision_model: string; tts: string };
+};
+
+export const SYSTEM = '__system__';
 
 const API = 'http://127.0.0.1:8000/api';
 
@@ -154,6 +192,8 @@ export const defaultExport: ExportOptions = {
   transition: 'fade',
   fade: 0.25,
   caption_chars: 84,
+  caption_style: 'blocks',
+  highlight: '#ffd23f',
 };
 
 export const formats = [

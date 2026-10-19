@@ -8,6 +8,7 @@ from pathlib import Path
 import imageio_ffmpeg
 from PIL import Image, ImageDraw, ImageFont, features
 
+from . import words
 from .store import ROOT, asset_path, uid
 
 FFMPEG = os.environ.get("FFMPEG_PATH") or imageio_ffmpeg.get_ffmpeg_exe()
@@ -128,9 +129,47 @@ def caption_png(text, language, options, font_path):
         draw.text((options.width / 2, y), shaped(line), font=font, fill=options.color, anchor="mt",
                   stroke_width=2, stroke_fill="black", **layout)
         y += line_height
+    return save_cropped(image)
+
+
+def save_cropped(image):
+    """Save only the drawn area; small overlays keep rendering fast when a scene has many captions."""
+    box = image.getbbox() or (0, 0, 2, 2)
     name = uid() + ".png"
-    image.save(asset_path(name))
-    return name
+    image.crop(box).save(asset_path(name))
+    return name, box[0], box[1]
+
+
+def phrase_png(words, highlight, options, font_path):
+    """Draw a short left-to-right phrase with one word in the highlight colour."""
+    image = Image.new("RGBA", (options.width, options.height))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(font_path, options.font_size)
+    space = draw.textlength(" ", font=font)
+    max_width = options.width * (1 - 2 * options.safe_area) - 24
+    lines, line, width = [], [], 0.0
+    for index, word in enumerate(words):
+        length = draw.textlength(word, font=font)
+        if line and width + space + length > max_width:
+            lines.append((line, width))
+            line, width = [], 0.0
+        width += (space if line else 0) + length
+        line.append((index, word, length))
+    if line:
+        lines.append((line, width))
+    line_height = int(options.font_size * 1.35)
+    y = min(options.height * options.caption_y, options.height * (1 - options.safe_area) - len(lines) * line_height)
+    stroke = max(2, options.font_size // 14)
+    ascent = font.getmetrics()[0]
+    for line, width in lines:
+        x = (options.width - width) / 2
+        for index, word, length in line:
+            fill = options.highlight if index == highlight else options.color
+            # A shared baseline keeps short words like "a" in line with the rest.
+            draw.text((x, y + ascent), word, font=font, fill=fill, anchor="ls", stroke_width=stroke, stroke_fill="black")
+            x += length + space
+        y += line_height
+    return save_cropped(image)
 
 
 def timestamp(seconds):
@@ -176,6 +215,52 @@ def motion_filter(motion, index, w, h, duration):
     return f",scale={w * scale}:{h * scale},zoompan=z='{zoom}':x='{x}':y='{y}':d=1:s={w}x{h}:fps={FPS}"
 
 
+def scene_words(scene, language, settings, duration, speech):
+    """Word timings for a scene: stored (exact or aligned), aligned now with Whisper, or estimated."""
+    if scene.words and scene.words_for == scene.narration:
+        return scene.words
+    if scene.narration and words.whisper_available() and words.whisper_downloaded(settings.whisper_size):
+        recognized = words.transcribe(asset_path(scene.narration), language, settings.whisper_size)
+        timed = words.align(scene.text, recognized)
+        if timed:
+            scene.words, scene.words_for = timed, scene.narration
+            return timed
+    return words.estimate(scene.text, speech or duration)
+
+
+def caption_plan(scene, project, options, settings, duration, speech):
+    """SRT cues as (text, start, end) and burned-in captions as (draw function, start, end)."""
+    if not scene.text.strip():
+        return [], []
+    font = settings.font
+    if options.caption_style == "blocks":
+        chunks = caption_chunks(scene.text, options.caption_chars)
+        cues = [(c, s, e) for c, (s, e) in zip(chunks, cue_times(chunks, duration))]
+        images = [(lambda c=c: caption_png(c, project.language, options, font), s, e) for c, s, e in cues]
+        return cues, images
+    timed = scene_words(scene, project.language, settings, duration, speech)
+    groups = words.phrases(timed)
+    cues, images = [], []
+    for g, group in enumerate(groups):
+        start = min(group[0]["start"], duration)
+        # The last phrase lingers briefly after speech ends rather than until the scene cuts.
+        end = min(groups[g + 1][0]["start"] if g + 1 < len(groups) else group[-1]["end"] + 1.0, duration)
+        if end <= start:
+            continue
+        texts = [w["text"] for w in group]
+        cues.append((" ".join(texts), start, end))
+        if project.language == "ur":
+            # Right-to-left text is shaped as a whole phrase; colouring single words would break joined letters.
+            images.append((lambda t=" ".join(texts): caption_png(t, "ur", options, font), start, end))
+            continue
+        for i, word in enumerate(group):
+            word_start = start if i == 0 else max(start, min(word["start"], end))
+            word_end = min(group[i + 1]["start"], end) if i + 1 < len(group) else end
+            if word_end > word_start:
+                images.append((lambda i=i, t=texts: phrase_png(t, i, options, font), word_start, word_end))
+    return cues, images
+
+
 def render(project, options, settings, progress, cancelled):
     if not project.scenes:
         raise ValueError("Add scenes before rendering.")
@@ -195,22 +280,23 @@ def render(project, options, settings, progress, cancelled):
             if project.mode == "video" and is_image:
                 raise ValueError("AI-generated video mode requires video clips in every scene.")
             info = probe(source)
-            duration = scene.duration
+            duration, speech = scene.duration, 0.0
             if scene.narration:
                 voice = probe(asset_path(scene.narration))
                 if not voice["audio"]:
                     raise ValueError("Narration must contain audio.")
-                duration = max(duration, voice["duration"] + 0.2)
+                speech = voice["duration"]
+                duration = max(duration, speech + 0.2)
             if not is_image and info["duration"] + 0.05 < duration:
                 raise ValueError(
                     f'Scene {index + 1}: clip is too short ({info["duration"]:.1f}s for {duration:.1f}s). '
                     "Shorten scene or generate a longer clip; narration is never cut."
                 )
-            plans.append((scene, source, is_image, info, duration))
+            plans.append((scene, source, is_image, info, duration, speech))
         # A crossfade overlaps neighbouring clips, so each clip except the last runs `blend` seconds longer.
         blend = min(options.fade, min(p[4] for p in plans) / 2) if crossfade else 0
         last = len(plans) - 1
-        for index, (scene, source, is_image, info, duration) in enumerate(plans):
+        for index, (scene, source, is_image, info, duration, speech) in enumerate(plans):
             progress(f"Rendering scene {index + 1}/{len(plans)}", index / len(plans) * 85)
             sources.append({"width": info["width"], "height": info["height"]})
             length = duration + (blend if index < last else 0)
@@ -236,16 +322,16 @@ def render(project, options, settings, progress, cancelled):
                 vf += f",fade=t=out:st={length - fade}:d={fade}"
             vf += "[base]"
             current, input_index = "base", 2
-            if options.captions and scene.text:
-                chunks = caption_chunks(scene.text, options.caption_chars)
-                for chunk, (start, end) in zip(chunks, cue_times(chunks, duration)):
-                    caption = caption_png(chunk, project.language, options, settings.font)
-                    temporary.append(caption)
-                    args += ["-loop", "1", "-i", str(asset_path(caption))]
+            cues, images = caption_plan(scene, project, options, settings, duration, speech)
+            if options.captions:
+                for draw_caption, start, end in images:
+                    name, x, y = draw_caption()
+                    temporary.append(name)
+                    args += ["-loop", "1", "-i", str(asset_path(name))]
                     # Captions switch cleanly at scene time rather than overlapping the next scene's during a crossfade.
-                    timed = len(chunks) > 1 or length > duration
+                    timed = len(images) > 1 or length > duration
                     enable = f":enable='between(t,{start:.3f},{end:.3f})'" if timed else ""
-                    vf += f";[{current}][{input_index}:v]overlay=0:0{enable}[c{input_index}]"
+                    vf += f";[{current}][{input_index}:v]overlay={x}:{y}{enable}[c{input_index}]"
                     current = f"c{input_index}"
                     input_index += 1
             if project.logo:
@@ -264,9 +350,8 @@ def render(project, options, settings, progress, cancelled):
             run(args, cancelled)
             clips.append(clip)
             durations.append(duration)
-            chunks = caption_chunks(scene.text, options.caption_chars)
-            for chunk, (start, end) in zip(chunks, cue_times(chunks, duration)):
-                subtitles.append(f"{cue}\n{timestamp(elapsed + start)} --> {timestamp(elapsed + end)}\n{chunk}\n")
+            for text, start, end in cues:
+                subtitles.append(f"{cue}\n{timestamp(elapsed + start)} --> {timestamp(elapsed + end)}\n{text}\n")
                 cue += 1
             elapsed += duration
 

@@ -61,7 +61,7 @@ def storyboard(project, settings):
     count = math.ceil(project.duration / settings.clip_seconds)
     scene_schema = {
         "type": "object",
-        "properties": {"text": {"type": "string"}, "prompt": {"type": "string"}},
+        "properties": {"text": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}},
         "required": ["text", "prompt"],
     }
     schema = {
@@ -82,6 +82,12 @@ def storyboard(project, settings):
     result = ollama_json(settings, settings.model, prompt, schema)
     if len(result["scenes"]) != count:
         raise ValueError(f'Model returned {len(result["scenes"])} scenes; expected {count}. Retry or change model.')
+    empty = sum(1 for s in result["scenes"] if not s["text"].strip() or not s["prompt"].strip())
+    if empty:
+        raise ValueError(
+            f"{settings.model} left {empty} scene(s) without a caption or visual prompt. Retry, or install the "
+            "larger model recommended in Setup check."
+        )
     project.title = result["title"]
     project.description = result["description"]
     project.scenes = [
@@ -116,7 +122,7 @@ def describe_photos(project, settings, cancelled, progress, only_scene=None):
     language = "Urdu" if project.language == "ur" else "English"
     schema = {
         "type": "object",
-        "properties": {"text": {"type": "string"}, "prompt": {"type": "string"}},
+        "properties": {"text": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}},
         "required": ["text", "prompt"],
     }
     for index, scene in enumerate(photos):
@@ -241,9 +247,12 @@ LIST_VOICES = (
 SPEAK = (
     "$ErrorActionPreference='Stop';Add-Type -AssemblyName System.Speech;"
     "$text=[IO.File]::ReadAllText($env:FRAME_TEXT,[Text.Encoding]::UTF8);"
-    "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+    "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;$words=New-Object Collections.ArrayList;"
+    "$s.add_SpeakProgress({param($sender,$e)[void]$words.Add(@{start=$e.AudioPosition.TotalSeconds;"
+    "at=$e.CharacterPosition;length=$e.CharacterCount})});"
     "try{$s.SelectVoice($env:FRAME_VOICE);$s.Rate=[int]$env:FRAME_RATE;"
-    "$s.SetOutputToWaveFile($env:FRAME_OUT);$s.Speak($text)}finally{$s.Dispose()}"
+    "$s.SetOutputToWaveFile($env:FRAME_OUT);$s.Speak($text)}finally{$s.Dispose()};"
+    "[IO.File]::WriteAllText($env:FRAME_WORDS,(ConvertTo-Json -Compress -InputObject @($words)),[Text.Encoding]::UTF8)"
 )
 
 
@@ -315,7 +324,19 @@ def wait(proc, cancelled, name):
         raise RuntimeError(f"{name}: " + (error or b"").decode(errors="replace")[-1500:])
 
 
+def speech_words(text, events, duration):
+    """Turn Windows SpeakProgress events (start time + character span) into timed words."""
+    words = []
+    for index, event in enumerate(events):
+        end = events[index + 1]["start"] if index + 1 < len(events) else duration
+        word = text[event["at"] : event["at"] + event["length"]]
+        if word.strip():
+            words.append({"text": word, "start": round(event["start"], 3), "end": round(max(end, event["start"]), 3)})
+    return words
+
+
 def narrate(scene, language, settings, cancelled):
+    """Synthesize narration; returns (asset name, word timings or [] when the engine gives none)."""
     if not scene.text.strip():
         raise ValueError("Scene has no script to narrate.")
     name = uid() + ".wav"
@@ -327,8 +348,9 @@ def narrate(scene, language, settings, cancelled):
                 "Add one in Windows speech settings or upload narration."
             )
         text_file = asset_path(uid() + ".txt")
+        words_file = asset_path(uid() + ".txt")
         text_file.write_text(scene.text, encoding="utf-8")
-        env = {"FRAME_TEXT": str(text_file), "FRAME_VOICE": voice["name"],
+        env = {"FRAME_TEXT": str(text_file), "FRAME_VOICE": voice["name"], "FRAME_WORDS": str(words_file),
                "FRAME_RATE": str(settings.voice_rate), "FRAME_OUT": str(asset_path(name))}
         try:
             with subprocess.Popen(
@@ -336,9 +358,13 @@ def narrate(scene, language, settings, cancelled):
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env={**os.environ, **env},
             ) as proc:
                 wait(proc, cancelled, "Windows speech")
+            events = json.loads(words_file.read_text(encoding="utf-8-sig") or "[]")
         finally:
             text_file.unlink(missing_ok=True)
-        return name
+            words_file.unlink(missing_ok=True)
+        from .media import probe
+
+        return name, speech_words(scene.text, events, probe(asset_path(name))["duration"])
     info = voice_info(settings)
     if not info["available"] or not info["language"].startswith(language):
         raise ValueError(
@@ -352,4 +378,4 @@ def narrate(scene, language, settings, cancelled):
         proc.stdin.close()
         proc.stdin = None
         wait(proc, cancelled, "Piper")
-    return name
+    return name, []

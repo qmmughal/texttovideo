@@ -16,6 +16,9 @@ class Scene(BaseModel):
     asset: str = ""
     narration: str = ""
     motion: Motion = "auto"
+    # Word timings relative to the narration start, valid only for the narration file named in words_for.
+    words: list[dict] = Field(default_factory=list, max_length=2000)
+    words_for: str = ""
 
 
 class Project(BaseModel):
@@ -38,6 +41,10 @@ class Settings(BaseModel):
     comfy: str = "http://127.0.0.1:8188"
     model: str = ""
     vision_model: str = ""
+    image_engine: Literal["comfy", "cpu"] = "comfy"
+    cpu_image_model: str = "lcm-dreamshaper"
+    cpu_image_device: str = Field("CPU", pattern=r"^(CPU|GPU(\.\d+)?|NPU)$")
+    whisper_size: Literal["tiny", "base", "small"] = "base"
     image_workflow: dict = Field(default_factory=dict)
     video_workflow: dict = Field(default_factory=dict)
     clip_seconds: float = Field(5, ge=1, le=30)
@@ -76,8 +83,10 @@ class Export(BaseModel):
     transition: Literal["fade", "crossfade", "none"] = "fade"
     fade: float = Field(0.25, ge=0, le=1.5)
     caption_chars: int = Field(84, ge=20, le=400)
+    caption_style: Literal["blocks", "words"] = "blocks"
+    highlight: str = "#ffd23f"
 
-    @field_validator("color")
+    @field_validator("color", "highlight")
     @classmethod
     def valid_color(cls, value):
         if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):

@@ -4,6 +4,7 @@ import Dashboard from '../components/Dashboard';
 import Editor from '../components/Editor';
 import JobsPanel from '../components/JobsPanel';
 import SettingsView, { type WorkflowText } from '../components/SettingsView';
+import SetupView from '../components/SetupView';
 import Sidebar from '../components/Sidebar';
 import Wizard from '../components/Wizard';
 import {
@@ -12,6 +13,8 @@ import {
   freshProject,
   newScene,
   uploadFile,
+  SYSTEM,
+  type Setup,
   type Job,
   type Project,
   type Settings,
@@ -21,6 +24,7 @@ import {
 const ACTIVE = ['running', 'queued'];
 const TAB_NAMES: Record<string, string> = {
   settings: 'SETTINGS',
+  setup: 'SETUP CHECK',
   editor: 'STORYBOARD',
   wizard: 'NEW VIDEO',
   dashboard: 'PROJECTS',
@@ -40,9 +44,16 @@ export default function Studio() {
   const [workflow, setWorkflow] = useState<WorkflowText>({ image_workflow: '{}', video_workflow: '{}' });
   const [options, setOptions] = useState(defaultExport);
   const [preview, setPreview] = useState('');
+  const [setup, setSetup] = useState<Setup | null>(null);
 
   const active = jobs.find((j) => j.project === project?.id && ACTIVE.includes(j.status));
   const locked = busy || !!active;
+  const setupDone =
+    !setup ||
+    (setup.ollama.state === 'running' &&
+      !!setup.settings.model &&
+      setup.ollama.models.includes(setup.settings.model) &&
+      setup.voice.available);
 
   async function guard(action: () => Promise<void>) {
     setError('');
@@ -72,8 +83,16 @@ export default function Studio() {
         video_workflow: JSON.stringify(s.video_workflow, null, 2),
       });
       setStatus(await call('/status'));
+      setSetup(await call('/setup'));
     });
   }, []);
+
+  async function reloadSettings() {
+    const [s, st, su] = await Promise.all([call<Settings>('/settings'), call<Status>('/status'), call<Setup>('/setup')]);
+    setSettings(s);
+    setStatus(st);
+    setSetup(su);
+  }
 
   // Poll jobs; when one finishes, reload the open project so generated assets appear.
   useEffect(() => {
@@ -84,6 +103,10 @@ export default function Studio() {
           const finished = old.some(
             (v) => ACTIVE.includes(v.status) && latest.some((n) => n.id === v.id && !ACTIVE.includes(n.status)),
           );
+          const setupFinished = old.some(
+            (v) => v.project === SYSTEM && ACTIVE.includes(v.status) && latest.some((n) => n.id === v.id && !ACTIVE.includes(n.status)),
+          );
+          if (setupFinished) reloadSettings().catch(() => {});
           if (finished) {
             call<Project[]>('/projects').then(setProjects);
             if (project?.id) {
@@ -132,7 +155,8 @@ export default function Studio() {
     await guard(async () => {
       const saved = await save(value);
       if (saved) {
-        await call(`/projects/${saved.id}/jobs/${kind}`, 'POST', kind === 'render' ? options : extra);
+        const body = kind === 'render' ? options : kind === 'visuals' ? { ...extra, aspect: options.width / options.height } : extra;
+        await call(`/projects/${saved.id}/jobs/${kind}`, 'POST', body);
         await refresh();
         setTab('editor');
       }
@@ -215,7 +239,24 @@ export default function Studio() {
       };
       setSettings(await call('/settings', 'PUT', value));
       setStatus(await call('/status'));
+      setSetup(await call('/setup'));
       setNotice('Settings saved and connections refreshed.');
+    });
+  }
+
+  async function install(kind: string, extra: object) {
+    await guard(async () => {
+      await call(`/setup/jobs/${kind}`, 'POST', extra);
+      await refresh();
+    });
+  }
+
+  async function useSettings(value: Partial<Settings>) {
+    if (!settings) return;
+    await guard(async () => {
+      await call('/settings', 'PUT', { ...settings, ...value });
+      await reloadSettings();
+      setNotice('Setting updated.');
     });
   }
 
@@ -223,7 +264,7 @@ export default function Studio() {
 
   return (
     <div className="app">
-      <Sidebar tab={tab} locked={locked} status={status} onTab={setTab} onNew={begin} />
+      <Sidebar tab={tab} locked={locked} status={status} setupDone={setupDone} onTab={setTab} onNew={begin} />
       <main>
         <header>
           <span>
@@ -241,6 +282,28 @@ export default function Studio() {
           <div className="notice" onClick={() => setNotice('')}>
             {notice} ×
           </div>
+        )}
+        {tab === 'dashboard' && !setupDone && (
+          <div className="setup-banner">
+            <div>
+              <b>Finish setting up AI on this computer</b>
+              <p className="small">A quick check recommends models that fit your memory and graphics, and installs them for you.</p>
+            </div>
+            <button className="primary" onClick={() => setTab('setup')}>
+              Open setup check →
+            </button>
+          </div>
+        )}
+        {tab === 'setup' && (
+          <SetupView
+            setup={setup}
+            jobs={jobs.filter((j) => j.project === SYSTEM)}
+            busy={busy}
+            onInstall={install}
+            onUse={useSettings}
+            onCancel={(j) => guard(async () => void (await call(`/jobs/${j.id}/cancel`, 'POST')))}
+            onRefresh={() => guard(reloadSettings)}
+          />
         )}
         {tab === 'dashboard' && (
           <Dashboard
@@ -278,6 +341,7 @@ export default function Studio() {
             locked={locked}
             dirty={dirty}
             canDescribe={!!settings?.vision_model}
+            canAlign={!!setup?.words.whisper && !!setup?.words.downloaded}
             update={update}
             setOptions={setOptions}
             setPreview={setPreview}
