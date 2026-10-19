@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-from . import voices
+from . import safety, voices
 from .models import Scene
 from .store import asset_path, uid
 
@@ -59,6 +59,7 @@ def ollama_json(settings, model, prompt, schema, images=None):
 def storyboard(project, settings):
     if not settings.model:
         raise ValueError("Select an installed Ollama model in Settings. Install one with ollama pull qwen3:8b.")
+    safety.review([project.prompt, project.style], settings)
     count = math.ceil(project.duration / settings.clip_seconds)
     scene_schema = {
         "type": "object",
@@ -78,7 +79,7 @@ def storyboard(project, settings):
         f"Create exactly {count} scenes for a {project.duration} second film. Language: {project.language}. "
         f"Style: {project.style}. Return title, description, scenes with text (short spoken caption) and prompt "
         f"(English visual description). Keep each spoken line within {settings.clip_seconds} seconds. "
-        f"Respect supplied scripts. Input: {project.prompt}"
+        f"Respect supplied scripts. {safety.GENERATION_RULES} Input: {project.prompt}"
     )
     result = ollama_json(settings, settings.model, prompt, schema)
     if len(result["scenes"]) != count:
@@ -89,6 +90,8 @@ def storyboard(project, settings):
             f"{settings.model} left {empty} scene(s) without a caption or visual prompt. Retry, or install the "
             "larger model recommended in Setup check."
         )
+    written = [result["title"], result["description"]]
+    safety.review(written + [t for s in result["scenes"] for t in (s["text"], s["prompt"])], settings)
     project.title = result["title"]
     project.description = result["description"]
     project.scenes = [
@@ -120,6 +123,7 @@ def describe_photos(project, settings, cancelled, progress, only_scene=None):
         photos = [s for s in photos if s.id == only_scene]
     if not photos:
         raise ValueError("Add photos to scenes first. Only image scenes can be described.")
+    safety.review([project.prompt], settings)
     language = "Urdu" if project.language == "ur" else "English"
     schema = {
         "type": "object",
@@ -141,7 +145,7 @@ def describe_photos(project, settings, cancelled, progress, only_scene=None):
             f"Narration so far: {' / '.join(story[-3:]) or 'this is the opening scene'}. "
             f'Look at the photo. Return "text": narration in {language} for this photo that continues the story, '
             f'at most {words} words, natural to read aloud, no hashtags or emoji; and "prompt": a concise English '
-            "description of what the photo shows."
+            f"description of what the photo shows. {safety.GENERATION_RULES}"
         )
         result = ollama_json(settings, model, prompt, schema, images=[encode_photo(scene.asset)])
         scene.text = result["text"].strip()[:3000]
@@ -162,6 +166,8 @@ def describe_photos(project, settings, cancelled, progress, only_scene=None):
         )
         project.title = summary["title"].strip()[:200] or project.title
         project.description = summary["description"].strip()
+    # Photos can carry content the theme did not; check what was written before it is saved.
+    safety.review([project.title, project.description] + [t for s in photos for t in (s.text, s.prompt)], settings)
     return project
 
 
@@ -186,6 +192,7 @@ def translate(project, settings, source, cancelled, progress, batch=12):
         raise ValueError("Select an installed Ollama model in Settings to translate.")
     src, dst = LANGUAGES[source], LANGUAGES[project.language]
     spoken = [s for s in project.scenes if s.text.strip()]
+    safety.review([project.title, project.description] + [s.text for s in spoken], settings)
     for start in range(0, len(spoken), batch):
         if cancelled():
             raise RuntimeError("Cancelled")
@@ -201,6 +208,7 @@ def translate(project, settings, source, cancelled, progress, batch=12):
         prompt = (
             f"Translate these {len(chunk)} narration lines of a short film from {src} to {dst}. Keep the meaning, "
             f"tone and roughly the same length, natural to read aloud. {SCRIPT_RULES[project.language]} "
+            f"{safety.GENERATION_RULES} "
             f"Return exactly {len(chunk)} lines in order, without numbers.\n{numbered}"
         )
         for attempt in range(2):

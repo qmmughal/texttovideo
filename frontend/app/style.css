@@ -1079,3 +1079,6 @@ nav button {
   margin: 8px 0;
   font-weight: 400;
 }
+.job b.refused {
+  color: #a4472d;
+}

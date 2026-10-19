@@ -4,6 +4,8 @@ All notable changes to Frame. Versions follow [semantic versioning](https://semv
 
 ## Unreleased
 
+- Acceptable-use policy ([ACCEPTABLE_USE.md](ACCEPTABLE_USE.md)): Frame refuses hateful, abusive, discriminatory, or harmful content, including content that demeans people for their religion or belief. A local model reviews requests and generated text, with a brief refusal and a safe alternative. Setup check warns when the reviewer model is too small, and a safety reviewer can be chosen in settings.
+
 - Documentation: new README with screenshots, CONTRIBUTING, SECURITY, and this changelog.
 - Fixed: project cards mixed English and Urdu text in the wrong order.
 - Fixed: the export preview showed a black box until played; it now opens on a frame after the fade-in.

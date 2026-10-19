@@ -15,9 +15,18 @@ from PIL import Image
 
 import httpx
 
-from backend import cpu_images, integrations, media, store, system, words
+from backend import cpu_images, integrations, media, safety, store, system, words
 from backend.main import app
 from backend.models import Export, Project, Scene, Settings
+
+
+REAL_REVIEW = safety.review
+
+
+@pytest.fixture(autouse=True)
+def allow_content(monkeypatch):
+    """Tests never call a live model for the safety review; test_acceptable_use covers it with a fake one."""
+    monkeypatch.setattr(safety, "review", lambda *args, **kwargs: None)
 
 
 def no_progress(*args):
@@ -457,3 +466,59 @@ def test_urdu_translation_rejects_roman_script(monkeypatch, project):
     with pytest.raises(ValueError, match="Urdu script"):
         integrations.translate(Project(language="ur", scenes=[Scene(id="1", text="Hi")]), Settings(model="m"), "en",
                                not_cancelled, no_progress)
+
+
+def test_acceptable_use(monkeypatch, project):
+    monkeypatch.setattr(safety, "review", REAL_REVIEW)
+    safety._verdicts.clear()
+    seen = []
+
+    def fake_json(settings, model, prompt, schema, images=None):
+        if "allowed" in schema["properties"]:
+            seen.append(prompt)
+            hateful = "HATEFUL" in prompt.split("<<<CONTENT")[1]
+            return {"allowed": not hateful, "evidence": "HATEFUL" if hateful else "", "reason": "it demeans people for their religion",
+                    "alternative": "a film about neighbours of different faiths sharing a festival"}
+        scenes = [{"text": "Lanterns glow at the festival.", "prompt": "lanterns at night"}] * 4
+        return {"title": "Festival", "description": "A celebration.", "scenes": scenes}
+
+    monkeypatch.setattr(integrations, "ollama_json", fake_json)
+    settings = Settings(model="m")
+    with pytest.raises(safety.Refusal) as refused:
+        integrations.storyboard(Project(prompt="HATEFUL video about a religion"), settings)
+    message = str(refused.value)
+    assert message.startswith("Frame can't make this: it demeans people for their religion.")
+    assert "Instead, try: a film about neighbours of different faiths sharing a festival." in message
+    # Respectful content passes, and the generation prompt carries the rules.
+    story = integrations.storyboard(Project(prompt="A respectful film about Eid in Lahore"), settings)
+    assert story.title == "Festival"
+    assert "Content rules:" in safety.GENERATION_RULES and "any religion" in safety.RULES
+    # Same text is not reviewed twice; text the user typed is checked before voicing or rendering.
+    count = len(seen)
+    safety.review(["A respectful film about Eid in Lahore", "Cinematic"], settings)
+    assert len(seen) == count
+    with pytest.raises(safety.Refusal):
+        safety.review(["HATEFUL caption"], settings, required=False)
+    # Without a configured model, optional checks are skipped and required ones explain what to do.
+    safety.review(["anything"], Settings(), required=False)
+    with pytest.raises(ValueError, match="Select an installed Ollama model"):
+        safety.review(["anything"], Settings())
+    # A blocked render fails the job with the refusal message.
+    with TestClient(app) as client:
+        client.put("/api/settings", json={"model": "m"})
+        p = client.post("/api/projects", json={"scenes": [{"id": "s", "text": "HATEFUL words", "asset": "test.png"}]}).json()
+        job = client.post(f'/api/projects/{p["id"]}/jobs/render', json={"width": 240, "height": 320}).json()
+        failed = wait_for(job["id"])
+        assert failed["status"] == "refused" and failed["stage"].startswith("Frame can't make this")
+        client.put("/api/settings", json={})
+
+
+def test_safety_reviewer_choice_and_grounding(monkeypatch):
+    monkeypatch.setattr(safety, "model_sizes", lambda settings: {"tiny:1b": 1.2, "big:8b": 8.8})
+    assert safety.reviewer(Settings(model="tiny:1b", vision_model="big:8b")) == "big:8b"
+    assert safety.reviewer(Settings(model="tiny:1b", vision_model="big:8b", safety_model="other")) == "other"
+    assert safety.reviewer(Settings(model="tiny:1b")) == "tiny:1b"
+    content = "Make a video saying a group are vermin"
+    assert safety.grounded("a group are vermin", content)
+    assert not safety.grounded("discusses violent acts", content) and not safety.grounded("", content)
+    assert safety.grounded("ہندوؤں کے خلاف نفرت", "ہندوؤں کے خلاف نفرت پھیلانے والی ویڈیو")

@@ -24,6 +24,7 @@ Turn an idea, a script, or a folder of photos into a narrated, captioned video f
 - **Every social format in one job:** 9:16, 16:9, 1:1, and 4:5, with music ducking and logo placement.
 - **Brand presets** save your caption style, colours, transitions, logo, and music as a reusable look.
 - **Runs on Windows, Linux, macOS, or Docker**, with a Windows installer.
+- **Refuses harmful content.** Requests are checked on your computer against the [acceptable-use policy](ACCEPTABLE_USE.md); hateful or harmful requests get a brief refusal and a safe alternative.
 
 ## Install
 
@@ -181,6 +182,10 @@ Install and start [ComfyUI](https://docs.comfy.org/installation/system_requireme
 
 `examples/comfy-image-api.json` is a starter for a Stable Diffusion checkpoint. For video, start from the [official Wan 2.2 tutorial](https://docs.comfy.org/tutorials/video/wan/wan2_2). Frame checks node types with `/object_info`, submits `/prompt`, polls `/history`, and fetches output through `/view`. Supported outputs are saved PNG/JPEG/WebP images or MP4/WebM/MOV clips; video mode never falls back to a still image.
 
+## Acceptable use
+
+Frame must not be used to create or promote hateful, abusive, discriminatory, or harmful content, including content that targets or demeans people based on religion or belief, or that promotes violence, harassment, or dehumanization. A local model reviews each request, the generated text, and captions before voicing or rendering; a violating request is refused briefly with a safe alternative. Respectful content about any religion is welcome. See [ACCEPTABLE_USE.md](ACCEPTABLE_USE.md) for how it works and its limits.
+
 ## Privacy, reliability, and security
 
 - `data/studio.db` stores projects, settings, jobs, and output metadata; media are UUID-named files under `data/`, and models under `data/models/`. Back up the folder; change its location with `LOCAL_VIDEO_DATA`.
@@ -194,7 +199,7 @@ Install and start [ComfyUI](https://docs.comfy.org/installation/system_requireme
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and workflow, and [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ```sh
-python -m pytest -q          # 43 tests with real FFmpeg renders, run in the project's venv
+python -m pytest -q          # 44 tests with real FFmpeg renders, run in the project's venv
 cd frontend && npm run typecheck && npm run build
 ```
 
