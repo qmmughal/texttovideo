@@ -1,43 +1,326 @@
 'use client';
-import {useEffect,useState} from 'react';
-type Scene={id:string;text:string;prompt:string;duration:number;asset:string;narration:string};
-type Output={asset:string;srt:string;width:number;height:number;duration:number;upscaled:boolean};
-type Project={id:string;title:string;description:string;prompt:string;language:string;duration:number;style:string;mode:string;scenes:Scene[];music:string;logo:string;exports:Output[]};
-type Settings={ollama:string;comfy:string;model:string;image_workflow:object;video_workflow:object;clip_seconds:number;threads:number;font:string;piper:string;voice:string};
-type Job={id:string;project:string;kind:string;status:string;stage:string;progress:number};
-const API='http://127.0.0.1:8000/api';
-const asset=(name:string)=>`${API}/assets/${name}`;
-async function call(path:string,method='GET',body?:unknown){const response=await fetch(API+path,{method,headers:body instanceof FormData?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:body instanceof FormData?body:JSON.stringify(body)});const value=await response.json();if(!response.ok)throw new Error(typeof value.detail==='string'?value.detail:JSON.stringify(value.detail));return value;}
-const fresh=():Project=>({id:'',title:'Untitled film',description:'',prompt:'',language:'en',duration:20,style:'Cinematic',mode:'slideshow',scenes:[],music:'',logo:'',exports:[]});
-const formats=[['9:16 · Shorts / Reels',1080,1920],['16:9 · YouTube',1920,1080],['1:1 · Square',1080,1080],['4:5 · Portrait',1080,1350],['Preview · 360 × 640',360,640]] as const;
-export default function Studio(){
- const [projects,setProjects]=useState<Project[]>([]),[project,setProject]=useState<Project|null>(null),[tab,setTab]=useState('dashboard'),[settings,setSettings]=useState<Settings|null>(null),[status,setStatus]=useState<any>(null),[jobs,setJobs]=useState<Job[]>([]),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[dirty,setDirty]=useState(false),[workflow,setWorkflow]=useState({image_workflow:'{}',video_workflow:'{}'});
- const [options,setOptions]=useState({width:360,height:640,fit:'crop',captions:true,font_size:26,caption_y:.8,safe_area:.08,color:'#ffffff',music_volume:.15,fade:.25});
- const [preview,setPreview]=useState('');
- const active=jobs.find(j=>j.project===project?.id&&['running','queued'].includes(j.status));
- const locked=busy||!!active;
- async function guard(action:()=>Promise<void>){setError('');setBusy(true);try{await action();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
- async function refresh(){const [p,j]=await Promise.all([call('/projects'),call('/jobs')]);setProjects(p);setJobs(j);}
- useEffect(()=>{guard(async()=>{await refresh();const s=await call('/settings');setSettings(s);setWorkflow({image_workflow:JSON.stringify(s.image_workflow,null,2),video_workflow:JSON.stringify(s.video_workflow,null,2)});setStatus(await call('/status'));});},[]);
- useEffect(()=>{const timer=setInterval(async()=>{try{const j:Job[]=await call('/jobs');setJobs(old=>{const finished=old.some(v=>['running','queued'].includes(v.status)&&j.some(n=>n.id===v.id&&!['running','queued'].includes(n.status)));if(finished){call('/projects').then(setProjects);if(project?.id)call('/projects/'+project.id).then(p=>{setProject(p);setDirty(false);if(p.exports.length)setPreview(p.exports[p.exports.length-1].asset);});}return j;});}catch{}},1500);return()=>clearInterval(timer);},[project?.id]);
- useEffect(()=>{const handler=(e:BeforeUnloadEvent)=>{if(dirty){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',handler);return()=>window.removeEventListener('beforeunload',handler);},[dirty]);
- function update(value:Partial<Project>){if(project){setProject({...project,...value});setDirty(true);}}
- function sceneUpdate(id:string,value:Partial<Scene>){if(project)update({scenes:project.scenes.map(s=>s.id===id?{...s,...value}:s)});}
- async function save(){if(!project)return;const p=await call('/projects'+(project.id?'/'+project.id:''),project.id?'PUT':'POST',project);setProject(p);setDirty(false);await refresh();return p as Project;}
- async function job(kind:string,extra:object={}){await guard(async()=>{const p=await save();if(p){await call(`/projects/${p.id}/jobs/${kind}`,'POST',kind==='render'?options:extra);await refresh();setTab('editor');}});}
- async function upload(file:File|undefined,apply:(name:string)=>void){if(!file)return;await guard(async()=>{const data=new FormData();data.append('file',file);const value=await call('/upload','POST',data);apply(value.asset);setNotice('Uploaded locally. Save the project to keep this edit.');});}
- async function begin(){await guard(async()=>{if(dirty)await save();setProject(fresh());setTab('wizard');setDirty(false);});}
- async function open(p:Project){await guard(async()=>{if(dirty&&project)await save();setProject(p);setDirty(false);setPreview(p.exports.at(-1)?.asset||'');setTab('editor');});}
- const total=project?.scenes.reduce((v,s)=>v+s.duration,0)||0;
- return <div className="app"><aside><a className="brand" onClick={()=>setTab('dashboard')}><span className="mark">F</span>frame<span className="brand-dot">●</span></a><p className="eyebrow">LOCAL VIDEO STUDIO</p><nav><button className={tab==='dashboard'?'selected':''} onClick={()=>setTab('dashboard')}>▦ <span>My projects</span></button><button className={tab==='wizard'?'selected':''} disabled={locked} onClick={()=>guard(async()=>{if(dirty)await save();setProject(fresh());setTab('wizard');setDirty(false);})}>＋ <span>Create a video</span></button><button className={tab==='settings'?'selected':''} onClick={()=>setTab('settings')}>⚙ <span>Models & settings</span></button></nav><div className="local-card"><span className="led"/> Your studio. Your machine.<p>Scripts, media, and renders stay local.</p><small>Ollama {status?.ollama?.online?'connected':'offline'}<br/>ComfyUI {status?.comfy?.online?'connected':'offline'}</small></div><div className="sidebar-foot">Made for your next idea.<br/><b>FRAME / 01</b></div></aside>
- <main><header><span>WORKSPACE <span className="muted">/ {tab==='settings'?'SETTINGS':tab==='editor'?'STORYBOARD':tab==='wizard'?'NEW VIDEO':'PROJECTS'}</span></span><span className="private">◉ LOCAL & PRIVATE</span></header>{error&&<div className="alert" role="alert">{error}<button onClick={()=>setError('')}>×</button></div>}{notice&&<div className="notice" onClick={()=>setNotice('')}>{notice} ×</div>}
- {tab==='dashboard'&&<><div className="hero"><div><p className="eyebrow">FROM A THOUGHT TO A TIMELINE</p><h1>Your words,<br/><em>in motion.</em></h1><p>A little imagination. A whole new frame.<br/>Create films with AI that runs on your machine.</p><button className="primary" onClick={begin}>＋ Create a video</button></div><div className="hero-art"><div className="orbit one"/><div className="orbit two"/><div className="film-card"><span>FRAME EXPERIMENTS</span><div className="sun"/><div className="mountain"/><div className="mountain second"/><b>A different perspective.</b><small>YOUR NEXT STORY STARTS HERE</small></div><span className="art-label">IMAGINE → CREATE → REFINE</span></div></div><div className="section-title"><h2>Your projects <small>{projects.length}</small></h2><span>Stored on this device</span></div><div className="project-grid"><button className="new-card" onClick={begin}><span>＋</span><b>Start with an idea</b><small>Build something worth watching</small></button>{projects.map((p,i)=><button className="project-card" key={p.id} onClick={()=>open(p)}><div className={'project-art tone'+i%3}>{p.scenes[0]?.asset&&/\.(png|jpg|jpeg|webp)$/.test(p.scenes[0].asset)?<img src={asset(p.scenes[0].asset)} alt="Project cover"/>:<span>▶</span>}<small>{p.mode==='video'?'AI VIDEO':'ANIMATED SLIDESHOW'}</small></div><div className="project-info"><b>{p.title}</b><p>{p.scenes.length} scenes · {p.duration}s · {p.language==='ur'?'اردو':'English'}</p></div></button>)}</div><div className="workflow-strip"><span>01 <b>Write your idea</b></span><span>02 <b>Shape your story</b></span><span>03 <b>Make it move</b></span><span>04 <b>Share your film</b></span></div></>}
- {tab==='wizard'&&project&&<section className="wizard"><p className="eyebrow">01 / THE STARTING POINT</p><h1>Every film starts<br/>with <em>an idea.</em></h1><p className="muted">Describe a moment, explore a topic, or paste your full script.</p><label>Your prompt or script<textarea rows={7} dir="auto" placeholder="A quiet journey through the old streets of Lahore at sunrise…" value={project.prompt} onChange={e=>update({prompt:e.target.value})}/></label><div className="form-grid"><label>Language<select value={project.language} onChange={e=>update({language:e.target.value})}><option value="en">English</option><option value="ur">اردو / Urdu</option></select></label><label>Visual style<select value={project.style} onChange={e=>update({style:e.target.value})}>{['Cinematic','Documentary','Watercolor','3D animation','Photorealistic','Minimal'].map(v=><option key={v}>{v}</option>)}</select></label><label>Duration (seconds)<input type="number" min="1" max="3600" value={project.duration} onChange={e=>update({duration:+e.target.value})}/></label></div><div className="presets">{[10,20,30,45,60].map(n=><button className={project.duration===n?'selected':''} key={n} onClick={()=>update({duration:n})}>{n}s</button>)}</div><label>Canvas<select onChange={e=>{const f=formats[+e.target.value];setOptions({...options,width:f[1],height:f[2],font_size:48});}} defaultValue="4">{formats.map((f,i)=><option key={f[0]} value={i}>{f[0]}</option>)}</select></label><div className="mode-grid">{[['slideshow','Animated slideshow','Pan, zoom, and fade between generated or uploaded images.'],['video','AI-generated video','Real clips from your configured local video workflow.']].map(([id,title,desc])=><button key={id} className={'mode '+(project.mode===id?'chosen':'')} onClick={()=>update({mode:id})}><b>{title}</b><p>{desc}</p></button>)}</div><div className="actions"><button disabled={busy||!project.prompt.trim()} className="primary" onClick={()=>job('storyboard')}>Generate storyboard →</button><button disabled={busy} onClick={()=>guard(async()=>{await save();setTab('editor');})}>Start with a blank storyboard</button></div><small className="muted">Uses your selected Ollama model. No cloud API required.</small></section>}
- {tab==='editor'&&project&&<><div className="editor-heading"><div><p className="eyebrow">02 / SHAPE YOUR STORY</p><input className="title-input" disabled={locked} dir="auto" value={project.title} onChange={e=>update({title:e.target.value})}/><p className="muted">{project.mode==='video'?'AI-generated video':'Animated slideshow'} · {total.toFixed(1)}s planned · {project.scenes.length} scenes {dirty?'· Unsaved changes':''}</p></div><button disabled={locked} onClick={()=>guard(async()=>{await save();setNotice('Project saved.');})}>Save project</button></div><div className="editor-grid"><div><fieldset disabled={locked}><label>Description<textarea dir="auto" value={project.description} onChange={e=>update({description:e.target.value})}/></label><div className="actions"><button onClick={()=>job('visuals')}>✧ Generate missing visuals</button><button onClick={()=>job('narration')}>♫ Generate missing voices</button><button onClick={()=>update({scenes:[...project.scenes,{id:crypto.randomUUID(),text:'',prompt:'',duration:5,asset:'',narration:''}]})}>＋ Scene</button></div>{project.scenes.map((s,i)=><article className="scene" key={s.id}><div className="scene-top"><b><span>{String(i+1).padStart(2,'0')}</span> SCENE</b><div><button aria-label="Move scene up" disabled={i===0} onClick={()=>{const scenes=[...project.scenes];[scenes[i-1],scenes[i]]=[scenes[i],scenes[i-1]];update({scenes});}}>↑</button><button aria-label="Move scene down" disabled={i===project.scenes.length-1} onClick={()=>{const scenes=[...project.scenes];[scenes[i+1],scenes[i]]=[scenes[i],scenes[i+1]];update({scenes});}}>↓</button><button aria-label="Delete scene" onClick={()=>update({scenes:project.scenes.filter(v=>v.id!==s.id)})}>×</button></div></div><div className="scene-content"><div className="scene-media">{s.asset?/\.(png|jpg|jpeg|webp)$/.test(s.asset)?<img src={asset(s.asset)} alt={`Scene ${i+1}`}/>:<video controls src={asset(s.asset)}/>:<div className="empty-visual">◇<small>Your visual goes here</small></div>}<label className="upload-button">Upload visual<input type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime" onChange={e=>upload(e.target.files?.[0],asset=>sceneUpdate(s.id,{asset}))}/></label><button onClick={()=>job('visuals',{scene:s.id})}>Regenerate visual</button></div><div className="scene-fields"><label>Script & caption<textarea dir={project.language==='ur'?'rtl':'ltr'} lang={project.language} rows={3} value={s.text} onChange={e=>sceneUpdate(s.id,{text:e.target.value})}/></label><label>Visual prompt<textarea rows={2} value={s.prompt} onChange={e=>sceneUpdate(s.id,{prompt:e.target.value})}/></label><div className="form-grid"><label>Duration (s)<input type="number" step=".1" min=".5" max="120" value={s.duration} onChange={e=>sceneUpdate(s.id,{duration:+e.target.value})}/></label><label className="upload-button">Upload narration<input type="file" accept="audio/*" onChange={e=>upload(e.target.files?.[0],narration=>sceneUpdate(s.id,{narration}))}/></label></div>{s.narration&&<><audio controls src={asset(s.narration)}/><button onClick={()=>sceneUpdate(s.id,{narration:''})}>Remove narration</button></>}</div></div></article>)}</fieldset></div><div className="right-panel"><div className="panel"><div className="section-title"><h3>Preview</h3><small>RENDERED OUTPUT</small></div><div className="preview" style={{aspectRatio:`${options.width}/${options.height}`,maxHeight:420}}>{preview?<video controls src={asset(preview)}/>:<div><span>▷</span><p>Your film is taking shape.</p><small>Render a preview to watch it here.</small></div>}<div className="safe-guide" style={{inset:`${options.safe_area*100}%`}}/></div><small className="muted">Dashed guide: safe area for the next export.</small></div><div className="panel"><h3>Export settings</h3><fieldset disabled={locked}><label>Format<select value={formats.findIndex(f=>f[1]===options.width&&f[2]===options.height)} onChange={e=>{const f=formats[+e.target.value];if(f)setOptions({...options,width:f[1],height:f[2],font_size:f[1]<500?26:48});}}><option value="-1">Custom dimensions</option>{formats.map((f,i)=><option key={f[0]} value={i}>{f[0]}</option>)}</select></label><div className="form-grid"><label>Width<input type="number" step="2" value={options.width} onChange={e=>setOptions({...options,width:+e.target.value})}/></label><label>Height<input type="number" step="2" value={options.height} onChange={e=>setOptions({...options,height:+e.target.value})}/></label></div><label>Fit<select value={options.fit} onChange={e=>setOptions({...options,fit:e.target.value})}><option value="crop">Crop to fill</option><option value="contain">Contain / letterbox</option><option value="blur">Blurred background</option></select></label><label className="check"><input type="checkbox" checked={options.captions} onChange={e=>setOptions({...options,captions:e.target.checked})}/> Burn in captions</label><div className="form-grid"><label>Font size<input type="number" value={options.font_size} onChange={e=>setOptions({...options,font_size:+e.target.value})}/></label><label>Color<input type="color" value={options.color} onChange={e=>setOptions({...options,color:e.target.value})}/></label></div><label>Caption position {Math.round(options.caption_y*100)}%<input type="range" min=".1" max=".9" step=".01" value={options.caption_y} onChange={e=>setOptions({...options,caption_y:+e.target.value})}/></label><label>Safe area {Math.round(options.safe_area*100)}%<input type="range" min="0" max=".3" step=".01" value={options.safe_area} onChange={e=>setOptions({...options,safe_area:+e.target.value})}/></label><label>Fade through black (seconds)<input type="number" min="0" max="1" step=".05" value={options.fade} onChange={e=>setOptions({...options,fade:+e.target.value})}/></label><div className="form-grid">{(['music','logo'] as const).map(key=><label key={key} className="upload-button">{project[key]?'Replace':'Add'} {key}<input type="file" accept={key==='music'?'audio/*':'image/png,image/jpeg,image/webp'} onChange={e=>upload(e.target.files?.[0],name=>update({[key]:name}))}/></label>)}</div>{project.music&&<button onClick={()=>update({music:''})}>Remove music</button>}{project.logo&&<button onClick={()=>update({logo:''})}>Remove logo</button>}<label>Music volume · auto ducking<input type="range" min="0" max="1" step=".01" value={options.music_volume} onChange={e=>setOptions({...options,music_volume:+e.target.value})}/></label><button className="primary full" disabled={!project.scenes.length} onClick={()=>job('render')}>Render MP4 ↗</button><p className="muted small">H.264 · AAC · 30 fps<br/>Narration can extend image scenes. Video clips must be long enough.</p></fieldset></div>{project.exports.length>0&&<div className="panel"><h3>Your exports</h3>{project.exports.map((o,i)=><div className="export" key={o.asset}><button onClick={()=>setPreview(o.asset)}>▶ {o.width} × {o.height} · {o.duration.toFixed(1)}s</button><small>{o.upscaled?'Upscaled from source media':'Source media meets export resolution'}</small><a href={asset(o.asset)+'?download=true'} download={`frame-${i}.mp4`}>Download MP4 ↗</a> <a href={asset(o.srt)}>SRT ↗</a></div>)}</div>}</div></div></>}
- {tab==='settings'&&settings&&<section className="settings"><p className="eyebrow">YOUR LOCAL ENGINE ROOM</p><h1>Models & <em>connections.</em></h1><p className="muted">Install models once. Create locally, whenever inspiration strikes.</p><div className="panel"><h3>Language & visuals</h3><div className="form-grid"><label>Ollama URL<input value={settings.ollama} onChange={e=>setSettings({...settings,ollama:e.target.value})}/></label><label>ComfyUI URL<input value={settings.comfy} onChange={e=>setSettings({...settings,comfy:e.target.value})}/></label></div><label>Installed Ollama model<select value={settings.model} onChange={e=>setSettings({...settings,model:e.target.value})}><option value="">Choose a model</option>{status?.ollama?.data?.models?.map((m:any)=><option key={m.name}>{m.name}</option>)}{settings.model&&!status?.ollama?.data?.models?.some((m:any)=>m.name===settings.model)&&<option>{settings.model}</option>}</select></label><p className="small muted">Start Ollama, then install a text model with <code>ollama pull qwen3:8b</code>. Start ComfyUI on port 8188. Refresh connections after saving changed URLs.</p>{(['image_workflow','video_workflow'] as const).map(key=><label key={key}>{key==='image_workflow'?'Image':'Video'} workflow — ComfyUI API JSON<textarea className="code" rows={7} value={workflow[key]} onChange={e=>setWorkflow({...workflow,[key]:e.target.value})}/></label>)}<p className="muted small">Export a working workflow using ComfyUI’s API format. Replace positive prompt text with <code>{'{{prompt}}'}</code>. Install all required local models and nodes; use a saved image or MP4 output. Set the actual supported clip length below. Frame checks installed node types before submission.</p><div className="form-grid"><label>Model clip length (seconds)<input type="number" min="1" max="30" value={settings.clip_seconds} onChange={e=>setSettings({...settings,clip_seconds:+e.target.value})}/></label><label>FFmpeg CPU threads<input type="number" min="1" max="16" value={settings.threads} onChange={e=>setSettings({...settings,threads:+e.target.value})}/></label></div></div><div className="panel"><h3>Captions & local narration</h3><label>Urdu-capable font path<input value={settings.font} onChange={e=>setSettings({...settings,font:e.target.value})}/></label><p className="muted small">Bundled Noto Naskh Arabic works offline. You can select another Urdu-capable font. Captions use RAQM when available, with local Arabic shaping and bidirectional layout as a Windows fallback.</p><label>Piper executable path (optional)<input value={settings.piper} onChange={e=>setSettings({...settings,piper:e.target.value})}/></label><label>Piper ONNX voice path<input value={settings.voice} onChange={e=>setSettings({...settings,voice:e.target.value})}/></label><p className="muted small">Detected voice: {status?.voice?.language||'none'}. {status?.voice?.message}</p></div><div className="panel"><h3>Machine status</h3><p>{status?.cpu||'CPU information unavailable'} · {status?.threads||'?'} logical processors</p><p className="muted small">GPU information: {status?.comfy?.data?.devices?.map((d:any)=>`${d.name} (${Math.round(d.vram_total/1024**3)} GB)`).join(', ')||'Connect ComfyUI to inspect available devices.'}</p><p className="muted small">Video models often require substantial GPU memory. CPU-only generation may be impractical. Use a small workflow, short scenes, and preview resolution first.</p></div><div className="actions"><button disabled={busy} className="primary" onClick={()=>guard(async()=>{const value={...settings,image_workflow:JSON.parse(workflow.image_workflow),video_workflow:JSON.parse(workflow.video_workflow)};setSettings(await call('/settings','PUT',value));setStatus(await call('/status'));setNotice('Settings saved and connections refreshed.');})}>Save & check connections</button><button disabled={busy} onClick={()=>guard(async()=>setStatus(await call('/status')))}>Refresh connections</button></div></section>}
- {jobs.filter(j=>j.project===project?.id).slice(0,3).length>0&&tab==='editor'&&<div className="jobs"><h3>Processing activity</h3>{jobs.filter(j=>j.project===project?.id).slice(0,3).map(j=><div key={j.id} className="job"><div><b>{j.kind} · {j.status}</b><p>{j.stage}</p><progress max="100" value={j.progress}/></div>{['queued','running'].includes(j.status)?<button onClick={()=>guard(async()=>{await call(`/jobs/${j.id}/cancel`,'POST');})}>Cancel</button>:['failed','interrupted','cancelled'].includes(j.status)?<button disabled={locked} onClick={()=>guard(async()=>{if(dirty)await save();await call(`/jobs/${j.id}/retry`,'POST');await refresh();})}>Retry</button>:null}</div>)}</div>}
- <footer>FRAME STUDIO <span>Local by design. Creative by nature.</span></footer></main></div>
+import { useEffect, useState } from 'react';
+import Dashboard from '../components/Dashboard';
+import Editor from '../components/Editor';
+import JobsPanel from '../components/JobsPanel';
+import SettingsView, { type WorkflowText } from '../components/SettingsView';
+import Sidebar from '../components/Sidebar';
+import Wizard from '../components/Wizard';
+import {
+  call,
+  defaultExport,
+  freshProject,
+  newScene,
+  uploadFile,
+  type Job,
+  type Project,
+  type Settings,
+  type Status,
+} from '../lib/api';
+
+const ACTIVE = ['running', 'queued'];
+const TAB_NAMES: Record<string, string> = {
+  settings: 'SETTINGS',
+  editor: 'STORYBOARD',
+  wizard: 'NEW VIDEO',
+  dashboard: 'PROJECTS',
+};
+
+export default function Studio() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [project, setProject] = useState<Project | null>(null);
+  const [tab, setTab] = useState('dashboard');
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [status, setStatus] = useState<Status | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [workflow, setWorkflow] = useState<WorkflowText>({ image_workflow: '{}', video_workflow: '{}' });
+  const [options, setOptions] = useState(defaultExport);
+  const [preview, setPreview] = useState('');
+
+  const active = jobs.find((j) => j.project === project?.id && ACTIVE.includes(j.status));
+  const locked = busy || !!active;
+
+  async function guard(action: () => Promise<void>) {
+    setError('');
+    setBusy(true);
+    try {
+      await action();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refresh() {
+    const [p, j] = await Promise.all([call<Project[]>('/projects'), call<Job[]>('/jobs')]);
+    setProjects(p);
+    setJobs(j);
+  }
+
+  useEffect(() => {
+    guard(async () => {
+      await refresh();
+      const s = await call<Settings>('/settings');
+      setSettings(s);
+      setWorkflow({
+        image_workflow: JSON.stringify(s.image_workflow, null, 2),
+        video_workflow: JSON.stringify(s.video_workflow, null, 2),
+      });
+      setStatus(await call('/status'));
+    });
+  }, []);
+
+  // Poll jobs; when one finishes, reload the open project so generated assets appear.
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const latest = await call<Job[]>('/jobs');
+        setJobs((old) => {
+          const finished = old.some(
+            (v) => ACTIVE.includes(v.status) && latest.some((n) => n.id === v.id && !ACTIVE.includes(n.status)),
+          );
+          if (finished) {
+            call<Project[]>('/projects').then(setProjects);
+            if (project?.id) {
+              call<Project>('/projects/' + project.id).then((p) => {
+                setProject(p);
+                setDirty(false);
+                if (p.exports.length) setPreview(p.exports[p.exports.length - 1].asset);
+              });
+            }
+          }
+          return latest;
+        });
+      } catch {}
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [project?.id]);
+
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
+
+  function update(value: Partial<Project>) {
+    if (project) {
+      setProject({ ...project, ...value });
+      setDirty(true);
+    }
+  }
+
+  async function save(value: Project | null = project) {
+    if (!value) return;
+    const saved = await call<Project>('/projects' + (value.id ? '/' + value.id : ''), value.id ? 'PUT' : 'POST', value);
+    setProject(saved);
+    setDirty(false);
+    await refresh();
+    return saved;
+  }
+
+  async function job(kind: string, extra: object = {}, value: Project | null = project) {
+    await guard(async () => {
+      const saved = await save(value);
+      if (saved) {
+        await call(`/projects/${saved.id}/jobs/${kind}`, 'POST', kind === 'render' ? options : extra);
+        await refresh();
+        setTab('editor');
+      }
+    });
+  }
+
+  async function upload(file: File | undefined, apply: (name: string) => void) {
+    if (!file) return;
+    await guard(async () => {
+      apply(await uploadFile(file));
+      setNotice('Uploaded locally. Save the project to keep this edit.');
+    });
+  }
+
+  async function begin() {
+    await guard(async () => {
+      if (dirty) await save();
+      setProject(freshProject());
+      setTab('wizard');
+      setDirty(false);
+    });
+  }
+
+  async function open(p: Project) {
+    await guard(async () => {
+      if (dirty && project) await save();
+      setProject(p);
+      setDirty(false);
+      setPreview(p.exports.at(-1)?.asset || '');
+      setTab('editor');
+    });
+  }
+
+  async function fromPhotos(files: File[]) {
+    if (!project) return;
+    let created: Project | undefined;
+    await guard(async () => {
+      const duration = Math.max(1.5, Math.round((project.duration / files.length) * 10) / 10);
+      const scenes = [];
+      for (const [i, file] of files.entries()) {
+        setNotice(`Uploading photo ${i + 1} of ${files.length}…`);
+        scenes.push(newScene({ asset: await uploadFile(file), duration }));
+      }
+      setNotice('');
+      created = await save({ ...project, mode: 'slideshow', scenes });
+      setTab('editor');
+    });
+    if (created && settings?.vision_model) await job('describe', {}, created);
+    else if (created) setNotice('Photos added. Write a caption for each scene, or choose a vision model in settings.');
+  }
+
+  async function duplicate(p: Project) {
+    await guard(async () => {
+      await call(`/projects/${p.id}/duplicate`, 'POST');
+      await refresh();
+      setNotice(`Duplicated “${p.title}”.`);
+    });
+  }
+
+  async function remove(p: Project) {
+    if (!window.confirm(`Delete “${p.title}” and its exports? Media used by other projects is kept.`)) return;
+    await guard(async () => {
+      await call(`/projects/${p.id}`, 'DELETE');
+      if (project?.id === p.id) {
+        setProject(null);
+        setDirty(false);
+      }
+      await refresh();
+      setNotice(`Deleted “${p.title}”.`);
+    });
+  }
+
+  async function saveSettings() {
+    if (!settings) return;
+    await guard(async () => {
+      const value = {
+        ...settings,
+        image_workflow: JSON.parse(workflow.image_workflow),
+        video_workflow: JSON.parse(workflow.video_workflow),
+      };
+      setSettings(await call('/settings', 'PUT', value));
+      setStatus(await call('/status'));
+      setNotice('Settings saved and connections refreshed.');
+    });
+  }
+
+  const projectJobs = jobs.filter((j) => j.project === project?.id).slice(0, 3);
+
+  return (
+    <div className="app">
+      <Sidebar tab={tab} locked={locked} status={status} onTab={setTab} onNew={begin} />
+      <main>
+        <header>
+          <span>
+            WORKSPACE <span className="muted">/ {TAB_NAMES[tab]}</span>
+          </span>
+          <span className="private">◉ LOCAL & PRIVATE</span>
+        </header>
+        {error && (
+          <div className="alert" role="alert">
+            {error}
+            <button onClick={() => setError('')}>×</button>
+          </div>
+        )}
+        {notice && (
+          <div className="notice" onClick={() => setNotice('')}>
+            {notice} ×
+          </div>
+        )}
+        {tab === 'dashboard' && (
+          <Dashboard
+            projects={projects}
+            busy={busy}
+            onNew={begin}
+            onOpen={open}
+            onDuplicate={duplicate}
+            onDelete={remove}
+          />
+        )}
+        {tab === 'wizard' && project && (
+          <Wizard
+            project={project}
+            options={options}
+            busy={busy}
+            visionModel={settings?.vision_model || ''}
+            update={update}
+            setOptions={setOptions}
+            onStoryboard={() => job('storyboard')}
+            onBlank={() =>
+              guard(async () => {
+                await save();
+                setTab('editor');
+              })
+            }
+            onPhotos={fromPhotos}
+          />
+        )}
+        {tab === 'editor' && project && (
+          <Editor
+            project={project}
+            options={options}
+            preview={preview}
+            locked={locked}
+            dirty={dirty}
+            canDescribe={!!settings?.vision_model}
+            update={update}
+            setOptions={setOptions}
+            setPreview={setPreview}
+            onSave={() =>
+              guard(async () => {
+                await save();
+                setNotice('Project saved.');
+              })
+            }
+            onJob={job}
+            onUpload={upload}
+          />
+        )}
+        {tab === 'settings' && settings && (
+          <SettingsView
+            settings={settings}
+            status={status}
+            workflow={workflow}
+            busy={busy}
+            setSettings={setSettings}
+            setWorkflow={setWorkflow}
+            onSave={saveSettings}
+            onRefresh={() => guard(async () => setStatus(await call('/status')))}
+          />
+        )}
+        {tab === 'editor' && (
+          <JobsPanel
+            jobs={projectJobs}
+            locked={locked}
+            onCancel={(j) => guard(async () => void (await call(`/jobs/${j.id}/cancel`, 'POST')))}
+            onRetry={(j) =>
+              guard(async () => {
+                if (dirty) await save();
+                await call(`/jobs/${j.id}/retry`, 'POST');
+                await refresh();
+              })
+            }
+          />
+        )}
+        <footer>
+          FRAME STUDIO <span>Local by design. Creative by nature.</span>
+        </footer>
+      </main>
+    </div>
+  );
 }
-
-
-
