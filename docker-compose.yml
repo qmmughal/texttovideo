@@ -1,0 +1,26 @@
+# docker compose up -d, then open http://127.0.0.1:8000 and use Setup check to install models.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+  frame:
+    build: .
+    depends_on:
+      - ollama
+    environment:
+      FRAME_OLLAMA_URL: http://ollama:11434
+      # Service names the app may contact besides localhost.
+      FRAME_SERVICE_HOSTS: ollama,host.docker.internal
+    ports:
+      # Published on this computer only; Frame is a single-user app.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - frame-data:/data
+    restart: unless-stopped
+
+volumes:
+  ollama:
+  frame-data:

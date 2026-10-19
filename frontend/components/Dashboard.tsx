@@ -7,9 +7,10 @@ type Props = {
   onOpen: (project: Project) => void;
   onDuplicate: (project: Project) => void;
   onDelete: (project: Project) => void;
+  onTranslate: (project: Project) => void;
 };
 
-export default function Dashboard({ projects, busy, onNew, onOpen, onDuplicate, onDelete }: Props) {
+export default function Dashboard({ projects, busy, onNew, onOpen, onDuplicate, onDelete, onTranslate }: Props) {
   return (
     <>
       <div className="hero">
@@ -75,6 +76,9 @@ export default function Dashboard({ projects, busy, onNew, onOpen, onDuplicate, 
               <div className="card-actions">
                 <button disabled={busy} onClick={() => onDuplicate(p)}>
                   Duplicate
+                </button>
+                <button disabled={busy || !p.scenes.length} onClick={() => onTranslate(p)}>
+                  {p.language === 'ur' ? 'English copy' : 'اردو copy'}
                 </button>
                 <button disabled={busy} className="danger" onClick={() => onDelete(p)}>
                   Delete

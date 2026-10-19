@@ -30,6 +30,9 @@ export default function SetupView({ setup, jobs, busy, onInstall, onUse, onCance
   const [visionModel, visionSize] = plan.vision_model;
   const imageModel = setup.images.models[0];
   const windowsVoices = setup.voice.engine === 'windows' ? setup.voice.voices : [];
+  const english = setup.voices.catalog.find((v) => v.key === 'en_US-joe-medium');
+  const urdu = setup.voices.catalog.find((v) => v.key === 'ur_PK-fasih-medium');
+  const voiceJob = jobFor('voice');
 
   const modelStep = (role: 'text' | 'vision', model: string, size: number, chosen: string): Step => {
     const installedChoice = chosen && has(chosen);
@@ -73,9 +76,27 @@ export default function SetupView({ setup, jobs, busy, onInstall, onUse, onCance
           ? `Piper voice ready (${setup.voice.language}).`
           : setup.voice.message,
       ready: setup.voice.available,
+      job: voiceJob?.options?.key !== urdu?.key ? voiceJob : undefined,
       action:
-        setup.settings.tts !== 'windows' && !setup.voice.available
-          ? { label: 'Use Windows voices', run: () => onUse({ tts: 'windows' }) }
+        setup.voices.engine && english && !english.downloaded && setup.settings.tts !== 'windows'
+          ? { label: `Download English voice (${english.size_mb} MB)`, run: () => onInstall('voice', { key: english.key }), disabled: !!running }
+          : setup.settings.tts !== 'windows' && !setup.voice.available && windowsVoices.length
+            ? { label: 'Use Windows voices', run: () => onUse({ tts: 'windows' }) }
+            : undefined,
+    },
+    {
+      title: 'Urdu narration voice',
+      detail: !setup.voices.engine
+        ? 'The built-in voice engine is not installed. Run setup again to add it.'
+        : urdu?.downloaded
+          ? `Ready · ${urdu.name} (${urdu.license} licence). Used for Urdu projects automatically.`
+          : `Natural Urdu narration offline: ${urdu?.name}, about ${urdu?.size_mb} MB.`,
+      ready: !!urdu?.downloaded,
+      optional: true,
+      job: voiceJob?.options?.key === urdu?.key ? voiceJob : undefined,
+      action:
+        setup.voices.engine && urdu && !urdu.downloaded
+          ? { label: 'Download Urdu voice', run: () => onInstall('voice', { key: urdu.key }), disabled: !!running }
           : undefined,
     },
     {

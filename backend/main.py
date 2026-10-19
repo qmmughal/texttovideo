@@ -9,16 +9,17 @@ import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
-from . import cpu_images, integrations, media, store, system, words
-from .models import Export, Project, Settings
+from . import cpu_images, integrations, media, store, system, voices, words
+from .models import Export, Preset, Project, Settings
 
 FRONTEND_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
 TRUSTED_ORIGINS = (*FRONTEND_ORIGINS, "http://localhost:8000", "http://127.0.0.1:8000")
 MEDIA_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm", ".wav", ".mp3", ".m4a", ".ogg")
-JOB_KINDS = ("storyboard", "describe", "visuals", "narration", "align", "render")
-SETUP_KINDS = ("ollama_model", "image_model", "whisper_model")
+JOB_KINDS = ("storyboard", "describe", "visuals", "narration", "align", "render", "translate")
+SETUP_KINDS = ("ollama_model", "image_model", "whisper_model", "voice")
 SYSTEM = "__system__"
 
 pool = ThreadPoolExecutor(max_workers=1)
@@ -124,6 +125,7 @@ def setup():
         "plan": plan,
         "ollama": {"state": system.ollama_state(current["ollama"]), "models": models},
         "voice": current["voice"],
+        "voices": {"engine": voices.available(), "catalog": voices.status()},
         "images": {
             "engine": s.image_engine,
             "openvino": cpu_images.available(),
@@ -147,6 +149,8 @@ def start_setup_job(kind: str, options: dict):
         raise ValueError("Choose a model to install")
     if kind == "image_model" and options.get("key") not in cpu_images.CATALOG:
         raise ValueError("Unknown image model")
+    if kind == "voice" and options.get("key") not in voices.CATALOG:
+        raise ValueError("Unknown voice")
     with lock:
         if any(j["project"] == SYSTEM and j["status"] in ("queued", "running") for j in store.all_docs("job")):
             raise HTTPException(409, "Another download is running. Wait for it to finish.")
@@ -172,6 +176,14 @@ def run_setup_job(job, s, cancelled, progress):
         cpu_images.download(options["key"], cancelled, progress)
         latest = settings()
         latest.image_engine, latest.cpu_image_model = "cpu", options["key"]
+        store.put("settings", "local", latest.model_dump())
+    elif job["kind"] == "voice":
+        voices.download(options["key"], cancelled, progress)
+        latest = settings()
+        if latest.tts == "piper" and not integrations.voice_info(latest)["available"]:
+            latest.tts = "builtin"
+        field = "builtin_voice_ur" if voices.CATALOG[options["key"]]["language"] == "ur" else "builtin_voice_en"
+        setattr(latest, field, options["key"])
         store.put("settings", "local", latest.model_dump())
     elif job["kind"] == "whisper_model":
         if not words.whisper_available():
@@ -226,6 +238,47 @@ def duplicate_project(key: str):
     return copy
 
 
+@app.post("/api/projects/{key}/translate")
+def translate_project(key: str, body: dict):
+    language = body.get("language")
+    source = Project(**store.get("project", key))
+    if language not in integrations.LANGUAGES or language == source.language:
+        raise ValueError("Choose a different language to translate into")
+    copy = source.model_copy(deep=True)
+    copy.id = store.uid()
+    copy.language = language
+    copy.exports = []
+    for scene in copy.scenes:
+        scene.id = store.uid()
+        # Narration and its word timings belong to the old language.
+        scene.narration, scene.words, scene.words_for = "", [], ""
+    store.put("project", copy.id, copy.model_dump())
+    job = start_job(copy.id, "translate", {"source": source.language})
+    return {"project": copy, "job": job}
+
+
+@app.get("/api/presets")
+def presets():
+    return store.all_docs("preset")
+
+
+@app.post("/api/presets")
+def save_preset(value: Preset):
+    # Size and format list are per export, not part of a brand look.
+    value.options = {k: v for k, v in Export(**value.options).model_dump().items() if k not in ("width", "height", "formats")}
+    existing = next((p for p in store.all_docs("preset") if p["name"].lower() == value.name.lower()), None)
+    value.id = existing["id"] if existing else store.uid()
+    store.put("preset", value.id, value.model_dump())
+    return value
+
+
+@app.delete("/api/presets/{key}")
+def delete_preset(key: str):
+    store.get("preset", key)
+    store.delete("preset", key)
+    return {"deleted": key}
+
+
 @app.delete("/api/projects/{key}")
 def delete_project(key: str):
     with lock:
@@ -236,6 +289,8 @@ def delete_project(key: str):
         in_use = set()
         for other in store.all_docs("project"):
             in_use |= store.project_assets(other)
+        for preset in store.all_docs("preset"):
+            in_use |= {preset.get("logo", ""), preset.get("music", "")}
         removed = 0
         for name in store.project_assets(project) - in_use:
             try:
@@ -346,13 +401,34 @@ def execute(key):
                     if (scene.narration or not scene.text.strip()) and not job.get("scene"):
                         continue
                     scene.narration, scene.words = integrations.narrate(scene, project.language, s, cancelled)
+                    if not scene.words and words.whisper_available() and words.whisper_downloaded(s.whisper_size):
+                        # Engines without word events get their timings from the speech model straight away.
+                        progress(f"Timing words in scene {index + 1}/{len(scenes)}", None)
+                        recognized = words.transcribe(store.asset_path(scene.narration), project.language, s.whisper_size)
+                        scene.words = words.align(scene.text, recognized)
                     scene.words_for = scene.narration if scene.words else ""
                 if cancelled():
                     raise RuntimeError("Cancelled")
                 store.put("project", project.id, project.model_dump())
+        elif job["kind"] == "translate":
+            project = integrations.translate(project, s, job["options"]["source"], cancelled, progress)
         elif job["kind"] == "render":
-            output = media.render(project, Export(**job["options"]), s, progress, cancelled)
-            project.exports.append(output)
+            base = Export(**job["options"])
+            targets = [[base.width, base.height]] + [f for f in base.formats if f != [base.width, base.height]]
+            for n, (width, height) in enumerate(targets):
+                # Keep captions the same size relative to the frame in every format.
+                scale = min(width, height) / min(base.width, base.height)
+                options = base.model_copy(update={
+                    "width": width, "height": height, "formats": [],
+                    "font_size": max(12, min(160, round(base.font_size * scale))),
+                })
+
+                def format_progress(stage, percent, n=n):
+                    label = f"{width}×{height} ({n + 1} of {len(targets)}) · {stage}" if len(targets) > 1 else stage
+                    progress(label, None if percent is None else (n * 100 + percent) / len(targets))
+
+                project.exports.append(media.render(project, options, s, format_progress, cancelled))
+                store.put("project", project.id, project.model_dump())
         if cancelled():
             raise RuntimeError("Cancelled")
         store.put("project", project.id, project.model_dump())
@@ -425,3 +501,9 @@ def retry(key: str):
     if job["status"] in ("running", "queued"):
         raise HTTPException(409, "Job is active")
     return start_job(job["project"], job["kind"], job["options"])
+
+
+# The exported web UI (frontend/out) is served from the same origin, so one process runs the whole studio.
+UI_DIR = Path(__file__).resolve().parents[1] / "frontend" / "out"
+if UI_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=UI_DIR, html=True), name="ui")

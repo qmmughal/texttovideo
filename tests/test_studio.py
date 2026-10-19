@@ -352,3 +352,108 @@ def test_setup_api_and_align_job(project, monkeypatch):
         assert store.get("job", job["id"])["status"] == "completed"
         scene = client.get(f'/api/projects/{p["id"]}').json()["scenes"][0]
         assert scene["text"] == "hello world" and scene["words_for"] == "talk.wav" and scene["words"][1]["start"] == 0.5
+
+
+def wait_for(job_id, seconds=60):
+    for _ in range(int(seconds / 0.05)):
+        job = store.get("job", job_id)
+        if job["status"] not in ("queued", "running"):
+            return job
+        time.sleep(0.05)
+    raise AssertionError("job did not finish")
+
+
+def test_builtin_voices(monkeypatch, project):
+    from backend import hub, voices
+
+    settings = Settings(tts="builtin")
+    assert not integrations.voice_info(settings)["available"]
+    with pytest.raises(ValueError, match="No Urdu voice"):
+        integrations.narrate(Scene(id="u", text="سلام"), "ur", settings, not_cancelled)
+    # Pretend the Urdu voice is downloaded and synthesise a short tone instead of loading a model.
+    folder = hub.folder_for(voices.CATALOG["ur_PK-fasih-medium"]["repo"])
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / ".complete").write_text("x")
+    spoken = []
+    monkeypatch.setattr(voices, "synthesize", lambda text, key, path, rate, threads: (spoken.append(key), write_silence(path.name, 1)))
+    assert voices.pick("ur", "missing") == "ur_PK-fasih-medium" and voices.pick("en", "en_US-joe-medium") is None
+    info = integrations.voice_info(settings)
+    assert info["available"] and info["language"] == "ur"
+    name, timed = integrations.narrate(Scene(id="u", text="سلام"), "ur", settings, not_cancelled)
+    assert spoken == ["ur_PK-fasih-medium"] and timed == [] and media.probe(store.asset_path(name))["audio"]
+    # Windows narration hands Urdu to the built-in voice when Windows has no Urdu voice.
+    monkeypatch.setattr(integrations, "windows_voices", lambda: [{"name": "Zira", "language": "en-US"}])
+    integrations.narrate(Scene(id="u2", text="سلام"), "ur", Settings(tts="windows"), not_cancelled)
+    assert spoken == ["ur_PK-fasih-medium", "ur_PK-fasih-medium"]
+
+
+def test_translate_project(monkeypatch, project):
+    def fake_json(settings, model, prompt, schema, images=None):
+        if "lines" in schema["properties"]:
+            count = schema["properties"]["lines"]["minItems"]
+            return {"lines": [f"ترجمہ {i + 1}" for i in range(count)]}
+        return {"title": "نئی فلم", "description": "ایک مختصر فلم"}
+
+    monkeypatch.setattr(integrations, "ollama_json", fake_json)
+    write_silence("old.wav", 1)
+    with TestClient(app) as client:
+        scenes = [{"id": "a", "text": "Hello there", "narration": "old.wav", "asset": "test.png"},
+                  {"id": "b", "text": "Goodbye", "asset": "test.png"}]
+        source = client.post("/api/projects", json={"title": "Trip", "scenes": scenes}).json()
+        assert client.post(f'/api/projects/{source["id"]}/translate', json={"language": "en"}).status_code == 400
+        client.put("/api/settings", json={"model": "llama3.2:1b"})
+        result = client.post(f'/api/projects/{source["id"]}/translate', json={"language": "ur"}).json()
+        assert wait_for(result["job"]["id"])["status"] == "completed"
+        copy = client.get(f'/api/projects/{result["project"]["id"]}').json()
+        assert copy["language"] == "ur" and copy["title"] == "نئی فلم"
+        assert [s["text"] for s in copy["scenes"]] == ["ترجمہ 1", "ترجمہ 2"]
+        assert copy["scenes"][0]["narration"] == "" and copy["scenes"][0]["asset"] == "test.png"
+        assert client.get(f'/api/projects/{source["id"]}').json()["scenes"][0]["text"] == "Hello there"
+
+
+def test_presets_and_all_formats(project):
+    Image.new("RGB", (64, 64), "red").save(store.asset_path("brand.png"))
+    with TestClient(app) as client:
+        preset = client.post("/api/presets", json={
+            "name": "Studio look", "logo": "brand.png",
+            "options": {"caption_style": "words", "highlight": "#00ff00", "width": 1080, "formats": [[1080, 1080]]},
+        }).json()
+        assert preset["options"]["caption_style"] == "words" and "width" not in preset["options"]
+        again = client.post("/api/presets", json={"name": "studio LOOK", "logo": "brand.png", "options": {}}).json()
+        assert again["id"] == preset["id"] and len(client.get("/api/presets").json()) == 1
+        # A preset's logo survives deleting the project that used it.
+        p = client.post("/api/projects", json={"logo": "brand.png", "scenes": [{"id": "s", "text": "Hi", "asset": "test.png", "duration": 1}]}).json()
+        client.delete(f'/api/projects/{p["id"]}')
+        assert store.asset_path("brand.png").is_file()
+        assert client.post("/api/projects/x/jobs/render", json={"formats": [[100, 100]]}).status_code in (400, 404, 422)
+        p = client.post("/api/projects", json={"scenes": [{"id": "s", "text": "Hi", "asset": "test.png", "duration": 1}]}).json()
+        job = client.post(f'/api/projects/{p["id"]}/jobs/render', json={
+            "width": 240, "height": 320, "font_size": 20, "formats": [[320, 240], [240, 240]]}).json()
+        assert wait_for(job["id"], 120)["status"] == "completed"
+        exports = client.get(f'/api/projects/{p["id"]}').json()["exports"]
+        assert [(e["width"], e["height"]) for e in exports] == [(240, 320), (320, 240), (240, 240)]
+        assert client.delete(f'/api/presets/{preset["id"]}').status_code == 200
+
+
+def test_service_hosts(monkeypatch):
+    from backend import models
+
+    with pytest.raises(ValueError):
+        Settings(ollama="http://ollama:11434")
+    monkeypatch.setattr(models, "SERVICE_HOSTS", ("ollama",))
+    assert Settings(ollama="http://ollama:11434").ollama == "http://ollama:11434"
+    with pytest.raises(ValueError):
+        Settings(ollama="http://evil.example:11434")
+
+
+def test_urdu_translation_rejects_roman_script(monkeypatch, project):
+    replies = iter([{"lines": ["Har kahani"]}, {"lines": ["ہر کہانی"]}, {"title": "فلم", "description": ""}])
+    monkeypatch.setattr(integrations, "ollama_json", lambda *a, **k: next(replies))
+    project = Project(language="ur", scenes=[Scene(id="1", text="Every story")])
+    result = integrations.translate(project, Settings(model="m"), "en", not_cancelled, no_progress)
+    assert result.scenes[0].text == "ہر کہانی"
+    replies = iter([{"lines": ["Roman"]}, {"lines": ["Roman again"]}])
+    monkeypatch.setattr(integrations, "ollama_json", lambda *a, **k: next(replies))
+    with pytest.raises(ValueError, match="Urdu script"):
+        integrations.translate(Project(language="ur", scenes=[Scene(id="1", text="Hi")]), Settings(model="m"), "en",
+                               not_cancelled, no_progress)

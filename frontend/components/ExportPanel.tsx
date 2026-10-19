@@ -1,4 +1,4 @@
-import { formats, type ExportOptions, type Project } from '../lib/api';
+import { formats, type ExportOptions, type Preset, type Project } from '../lib/api';
 
 type Props = {
   project: Project;
@@ -8,14 +8,69 @@ type Props = {
   update: (value: Partial<Project>) => void;
   onUpload: (file: File | undefined, apply: (name: string) => void) => void;
   onRender: () => void;
+  presets: Preset[];
+  onSavePreset: (name: string) => void;
+  onDeletePreset: (preset: Preset) => void;
 };
 
-export default function ExportPanel({ project, options, locked, setOptions, update, onUpload, onRender }: Props) {
+const social = formats.slice(0, 4);
+
+export default function ExportPanel({ project, options, locked, setOptions, update, onUpload, onRender, presets, onSavePreset, onDeletePreset }: Props) {
   const set = (value: Partial<ExportOptions>) => setOptions({ ...options, ...value });
+  const extra = options.formats.filter(([w, h]) => w !== options.width || h !== options.height);
+  const toggleFormat = (w: number, h: number) =>
+    set({
+      formats: options.formats.some(([a, b]) => a === w && b === h)
+        ? options.formats.filter(([a, b]) => a !== w || b !== h)
+        : [...options.formats, [w, h]],
+    });
+  const applyPreset = (preset: Preset) => {
+    setOptions({ ...options, ...preset.options });
+    update({ logo: preset.logo || project.logo, music: preset.music || project.music });
+  };
   return (
     <div className="panel">
       <h3>Export settings</h3>
       <fieldset disabled={locked}>
+        <div className="preset-row">
+          <label>
+            Brand preset
+            <select
+              value=""
+              onChange={(e) => {
+                const preset = presets.find((p) => p.id === e.target.value);
+                if (preset) applyPreset(preset);
+              }}
+            >
+              <option value="">{presets.length ? 'Apply a saved look…' : 'No presets yet'}</option>
+              {presets.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={() => {
+              const name = window.prompt('Name this look (caption style, colours, transition, logo and music):');
+              if (name?.trim()) onSavePreset(name.trim());
+            }}
+          >
+            Save look
+          </button>
+          {presets.length > 0 && (
+            <button
+              className="danger"
+              onClick={() => {
+                const name = window.prompt(`Delete which preset? ${presets.map((p) => p.name).join(', ')}`);
+                const preset = presets.find((p) => p.name.toLowerCase() === name?.trim().toLowerCase());
+                if (preset) onDeletePreset(preset);
+              }}
+            >
+              Delete…
+            </button>
+          )}
+        </div>
         <label>
           Format
           <select
@@ -169,8 +224,23 @@ export default function ExportPanel({ project, options, locked, setOptions, upda
             onChange={(e) => set({ music_volume: +e.target.value })}
           />
         </label>
+        <div className="also">
+          <span>Also render</span>
+          {social
+            .filter(([, w, h]) => w !== options.width || h !== options.height)
+            .map(([label, w, h]) => (
+              <label key={label} className="check">
+                <input
+                  type="checkbox"
+                  checked={options.formats.some(([a, b]) => a === w && b === h)}
+                  onChange={() => toggleFormat(w, h)}
+                />{' '}
+                {label}
+              </label>
+            ))}
+        </div>
         <button className="primary full" disabled={!project.scenes.length} onClick={onRender}>
-          Render MP4 ↗
+          {extra.length ? `Render ${extra.length + 1} formats ↗` : 'Render MP4 ↗'}
         </button>
         <p className="muted small">
           H.264 · AAC · 30 fps

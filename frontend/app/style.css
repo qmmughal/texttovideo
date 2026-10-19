@@ -1052,3 +1052,30 @@ nav button {
     flex-wrap: wrap;
   }
 }
+
+.preset-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.preset-row label {
+  flex: 1;
+  min-width: 140px;
+  margin-bottom: 0;
+}
+.preset-row button {
+  padding: 11px 12px;
+}
+.also {
+  margin: 14px 0;
+  font-size: 11px;
+  color: #697680;
+}
+.also > span {
+  font-weight: 600;
+}
+.also .check {
+  margin: 8px 0;
+  font-weight: 400;
+}

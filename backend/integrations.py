@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
+from . import voices
 from .models import Scene
 from .store import asset_path, uid
 
@@ -164,6 +165,70 @@ def describe_photos(project, settings, cancelled, progress, only_scene=None):
     return project
 
 
+LANGUAGES = {"en": "English", "ur": "Urdu"}
+SCRIPT_RULES = {
+    "ur": "Write Urdu in Urdu script (Nastaliq/Arabic letters), never in Roman Urdu or Latin letters.",
+    "en": "Write in English.",
+}
+
+
+def in_script(text, language):
+    """Urdu output must be mostly Arabic-script letters; models often slip into Roman Urdu."""
+    if language != "ur":
+        return True
+    letters = [c for c in text if c.isalpha()]
+    return bool(letters) and sum("؀" <= c <= "ۿ" for c in letters) / len(letters) > 0.6
+
+
+def translate(project, settings, source, cancelled, progress, batch=12):
+    """Translate captions, title and description; visual prompts stay in English for image models."""
+    if not settings.model:
+        raise ValueError("Select an installed Ollama model in Settings to translate.")
+    src, dst = LANGUAGES[source], LANGUAGES[project.language]
+    spoken = [s for s in project.scenes if s.text.strip()]
+    for start in range(0, len(spoken), batch):
+        if cancelled():
+            raise RuntimeError("Cancelled")
+        chunk = spoken[start : start + batch]
+        progress(f"Translating scenes {start + 1}-{start + len(chunk)} of {len(spoken)}", start / max(len(spoken), 1) * 90)
+        schema = {
+            "type": "object",
+            "properties": {"lines": {"type": "array", "minItems": len(chunk), "maxItems": len(chunk),
+                                     "items": {"type": "string", "minLength": 1}}},
+            "required": ["lines"],
+        }
+        numbered = "\n".join(f"{i + 1}. {s.text}" for i, s in enumerate(chunk))
+        prompt = (
+            f"Translate these {len(chunk)} narration lines of a short film from {src} to {dst}. Keep the meaning, "
+            f"tone and roughly the same length, natural to read aloud. {SCRIPT_RULES[project.language]} "
+            f"Return exactly {len(chunk)} lines in order, without numbers.\n{numbered}"
+        )
+        for attempt in range(2):
+            lines = ollama_json(settings, settings.model, prompt, schema)["lines"]
+            complete = len(lines) == len(chunk) and all(line.strip() for line in lines)
+            if complete and all(in_script(line, project.language) for line in lines):
+                break
+        else:
+            raise ValueError(
+                f"{settings.model} did not return a complete {dst} translation in {dst} script. "
+                "Retry or choose a larger model."
+            )
+        for scene, line in zip(chunk, lines):
+            scene.text = line.strip()[:3000]
+    progress("Translating title", 95)
+    meta = ollama_json(
+        settings, settings.model,
+        f"Translate this film title and description from {src} to {dst}. {SCRIPT_RULES[project.language]}\n"
+        f"Title: {project.title}\n"
+        f"Description: {project.description or '-'}",
+        {"type": "object", "properties": {"title": {"type": "string", "minLength": 1}, "description": {"type": "string"}},
+         "required": ["title", "description"]},
+    )
+    project.title = meta["title"].strip()[:200] or project.title
+    project.description = meta["description"].strip()
+    return project
+
+
 # --- ComfyUI ----------------------------------------------------------------
 
 
@@ -287,14 +352,26 @@ def pick_windows_voice(settings, language, voices):
 
 
 def voice_info(settings):
+    if settings.tts == "builtin":
+        ready = [v for v in voices.status() if v["downloaded"]]
+        if not voices.available():
+            return {"engine": "builtin", "available": False, "language": "", "voices": [],
+                    "message": "The built-in voice engine (sherpa-onnx) is not installed. Run setup again."}
+        if not ready:
+            return {"engine": "builtin", "available": False, "language": "", "voices": [],
+                    "message": "Download an English or Urdu voice in Setup check."}
+        languages = sorted({v["language"] for v in ready})
+        return {"engine": "builtin", "available": True, "language": ", ".join(languages),
+                "voices": [{"name": v["key"], "language": v["language"]} for v in ready],
+                "message": f"Downloaded voices: {', '.join(v['name'] for v in ready)}."}
     if settings.tts == "windows":
-        voices = windows_voices()
-        if not voices:
+        system_voices = windows_voices()
+        if not system_voices:
             return {"engine": "windows", "available": False, "language": "", "voices": [],
                     "message": "No Windows voices found. Add one in Settings > Time & language > Speech."}
-        chosen = next((v for v in voices if v["name"] == settings.windows_voice), voices[0])
-        languages = sorted({v["language"] for v in voices})
-        return {"engine": "windows", "available": True, "language": chosen["language"], "voices": voices,
+        chosen = next((v for v in system_voices if v["name"] == settings.windows_voice), system_voices[0])
+        languages = sorted({v["language"] for v in system_voices})
+        return {"engine": "windows", "available": True, "language": chosen["language"], "voices": system_voices,
                 "message": f"Installed voice languages: {', '.join(languages)}. Install an Urdu voice in Windows "
                            "speech settings for Urdu narration, or upload narration."}
     if not settings.voice:
@@ -340,7 +417,26 @@ def narrate(scene, language, settings, cancelled):
     if not scene.text.strip():
         raise ValueError("Scene has no script to narrate.")
     name = uid() + ".wav"
-    if settings.tts == "windows":
+    engine = settings.tts
+    if engine == "windows" and not pick_windows_voice(settings, language, windows_voices()) and voices.pick(
+        language, settings.builtin_voice_ur if language == "ur" else settings.builtin_voice_en
+    ):
+        # Windows rarely ships an Urdu voice; a downloaded built-in voice covers that language instead.
+        engine = "builtin"
+    if engine == "builtin":
+        if not voices.available():
+            raise ValueError("The built-in voice engine is not installed. Run setup again.")
+        preferred = settings.builtin_voice_ur if language == "ur" else settings.builtin_voice_en
+        key = voices.pick(language, preferred)
+        if not key:
+            raise ValueError(
+                f"No {'Urdu' if language == 'ur' else 'English'} voice is downloaded. Download one in Setup check."
+            )
+        if cancelled():
+            raise RuntimeError("Cancelled")
+        voices.synthesize(scene.text, key, asset_path(name), settings.voice_rate, settings.threads)
+        return name, []
+    if engine == "windows":
         voice = pick_windows_voice(settings, language, windows_voices())
         if not voice:
             raise ValueError(
