@@ -50,6 +50,7 @@ Tests render real video with FFmpeg rather than mocking it. External model serve
 - Keep user-facing errors actionable: say what to do next ("Download an Urdu voice in Setup check"), not just what failed.
 - Never send user data off the machine. New network access must go to localhost, a listed service host, or a model download the user starts.
 - Only add models and voices whose licences allow commercial use, and show the licence in the app.
+- Any new feature that writes or transforms text must go through `backend/safety.py`: include `GENERATION_RULES` in the prompt and call `safety.review` on the input and on the output before saving. See [ACCEPTABLE_USE.md](ACCEPTABLE_USE.md).
 - PowerShell scripts must stay ASCII: Windows PowerShell 5.1 reads BOM-less files in the system code page.
 
 ## Pull requests

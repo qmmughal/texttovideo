@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
-from . import cpu_images, integrations, media, store, system, voices, words
+from . import cpu_images, integrations, media, safety, store, system, voices, words
 from .models import Export, Preset, Project, Settings
 
 FRONTEND_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
@@ -138,7 +138,14 @@ def setup():
             "downloaded": words.whisper_downloaded(s.whisper_size),
         },
         "settings": {"model": s.model, "vision_model": s.vision_model, "tts": s.tts},
+        "safety": safety_status(s, current["ollama"]["online"]),
     }
+
+
+def safety_status(s, online):
+    model = safety.reviewer(s) if online else (s.safety_model or s.model or s.vision_model)
+    size = safety.model_sizes(s).get(model) if online and model else None
+    return {"model": model, "size_b": size, "small": size is not None and size < safety.SMALL_MODEL}
 
 
 @app.post("/api/setup/jobs/{kind}")
@@ -385,6 +392,9 @@ def execute(key):
             scenes = [v for v in project.scenes if not job.get("scene") or v.id == job["scene"]]
             if not scenes:
                 raise ValueError("No scenes selected. Generate or add a storyboard first.")
+            # Text the user wrote is checked too; without a reachable local model this check is skipped.
+            sources = [v.text for v in scenes] if job["kind"] == "narration" else [v.prompt for v in scenes]
+            safety.review(sources, s, required=False)
             for index, scene in enumerate(scenes):
                 if cancelled():
                     raise RuntimeError("Cancelled")
@@ -413,6 +423,7 @@ def execute(key):
         elif job["kind"] == "translate":
             project = integrations.translate(project, s, job["options"]["source"], cancelled, progress)
         elif job["kind"] == "render":
+            safety.review([project.title] + [v.text for v in project.scenes], s, required=False)
             base = Export(**job["options"])
             targets = [[base.width, base.height]] + [f for f in base.formats if f != [base.width, base.height]]
             for n, (width, height) in enumerate(targets):
@@ -439,7 +450,9 @@ def execute(key):
     except Exception as exc:
         with lock:
             current = store.get("job", key)
-            current.update(status="cancelled" if cancelled() else "failed", stage=str(exc))
+            # A refusal is final: retrying the same request would be refused again.
+            status = "cancelled" if cancelled() else "refused" if isinstance(exc, safety.Refusal) else "failed"
+            current.update(status=status, stage=str(exc))
             store.put("job", key, current)
 
 

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { formats, type ExportOptions, type Project } from '../lib/api';
+import { formats, POLICY_URL, type ExportOptions, type Project } from '../lib/api';
 
 const styles = ['Cinematic', 'Documentary', 'Watercolor', '3D animation', 'Photorealistic', 'Minimal'];
 
@@ -154,7 +154,11 @@ export default function Wizard(props: Props) {
           ? visionModel
             ? `Narration is written by ${visionModel} on this machine. Photos never leave your computer.`
             : 'Choose a vision model in Models & settings to write narration automatically; otherwise write captions yourself.'
-          : 'Uses your selected Ollama model. No cloud API required.'}
+          : 'Uses your selected Ollama model. No cloud API required.'}{' '}
+        Frame refuses hateful, abusive, discriminatory, or harmful requests ·{' '}
+        <a href={POLICY_URL} target="_blank" rel="noreferrer">
+          acceptable use
+        </a>
       </small>
     </section>
   );

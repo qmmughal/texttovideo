@@ -47,6 +47,8 @@ class Settings(BaseModel):
     comfy: str = os.environ.get("FRAME_COMFY_URL", "http://127.0.0.1:8188")
     model: str = ""
     vision_model: str = ""
+    # Model that reviews requests against the acceptable-use policy; empty picks the largest configured model.
+    safety_model: str = ""
     image_engine: Literal["comfy", "cpu"] = "comfy"
     cpu_image_model: str = "lcm-dreamshaper"
     cpu_image_device: str = Field("CPU", pattern=r"^(CPU|GPU(\.\d+)?|NPU)$")

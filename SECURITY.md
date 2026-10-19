@@ -11,6 +11,8 @@ Frame is a single-user application for your own computer. It is not designed to 
 - External programs (FFmpeg, PowerShell speech) are started with argument lists, never shell strings, and narration text is passed through a file.
 - Network access happens only to your local model servers and to Hugging Face or Ollama when you start a model download.
 
+Content rules are described in [ACCEPTABLE_USE.md](ACCEPTABLE_USE.md).
+
 ComfyUI custom nodes, Ollama models, and downloaded voices or image models are third-party software and data that you choose to install and trust.
 
 ## Supported versions

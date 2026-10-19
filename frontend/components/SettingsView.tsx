@@ -1,4 +1,4 @@
-import type { Settings, Status } from '../lib/api';
+import { POLICY_URL, type Settings, type Status } from '../lib/api';
 
 export type WorkflowText = { image_workflow: string; video_workflow: string };
 
@@ -63,6 +63,22 @@ export default function SettingsView({ settings, status, workflow, busy, setSett
             </select>
           </label>
         </div>
+        <label>
+          Safety reviewer
+          <select value={settings.safety_model} onChange={(e) => set({ safety_model: e.target.value })}>
+            <option value="">Automatic (larger of the story and vision models)</option>
+            {models.map((m) => (
+              <option key={m.name}>{m.name}</option>
+            ))}
+          </select>
+        </label>
+        <p className="small muted">
+          Every request is checked against the{' '}
+          <a href={POLICY_URL} target="_blank" rel="noreferrer">
+            acceptable-use policy
+          </a>{' '}
+          before anything is written, voiced, or rendered. Models under about 4B parameters miss some harmful requests.
+        </p>
         <p className="small muted">
           Start Ollama, then install a text model with <code>ollama pull qwen3:8b</code> and, for photo stories, a vision
           model with <code>ollama pull qwen3-vl:8b</code>. Ollama writes text only; it does not generate images or video.

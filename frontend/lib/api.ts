@@ -42,6 +42,7 @@ export type Settings = {
   comfy: string;
   model: string;
   vision_model: string;
+  safety_model: string;
   image_engine: 'comfy' | 'cpu';
   cpu_image_model: string;
   cpu_image_device: string;
@@ -131,9 +132,12 @@ export type Setup = {
   images: { engine: string; openvino: boolean; models: ImageModel[]; comfy: boolean };
   words: { whisper: boolean; size: string; downloaded: boolean };
   settings: { model: string; vision_model: string; tts: string };
+  safety: { model: string; size_b: number | null; small: boolean };
 };
 
 export const SYSTEM = '__system__';
+
+export const POLICY_URL = 'https://github.com/qmmughal/texttovideo/blob/main/ACCEPTABLE_USE.md';
 
 // Served by the backend in normal use; the Next dev server on port 3000 talks to the backend directly.
 const API =

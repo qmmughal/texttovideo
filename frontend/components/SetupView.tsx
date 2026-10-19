@@ -1,4 +1,4 @@
-import type { Job, Settings, Setup } from '../lib/api';
+import { POLICY_URL, type Job, type Settings, type Setup } from '../lib/api';
 
 type Props = {
   setup: Setup | null;
@@ -98,6 +98,16 @@ export default function SetupView({ setup, jobs, busy, onInstall, onUse, onCance
         setup.voices.engine && urdu && !urdu.downloaded
           ? { label: 'Download Urdu voice', run: () => onInstall('voice', { key: urdu.key }), disabled: !!running }
           : undefined,
+    },
+    {
+      title: 'Content safety',
+      detail: !setup.safety.model
+        ? 'Install a story writer model; it also checks requests against the acceptable-use policy.'
+        : setup.safety.small
+          ? `${setup.safety.model} reviews requests, but models this small miss some harmful ones. Install a 4B or larger model, or choose one as the safety reviewer in Models & settings.`
+          : `${setup.safety.model} checks every request against the acceptable-use policy before anything is made.`,
+      ready: !!setup.safety.model && !setup.safety.small,
+      optional: true,
     },
     {
       title: 'AI images on this computer',
@@ -207,6 +217,13 @@ export default function SetupView({ setup, jobs, busy, onInstall, onUse, onCance
           Check again
         </button>
       </div>
+      <p className="small muted">
+        Frame refuses hateful, abusive, discriminatory, or harmful content. Read the{' '}
+        <a href={POLICY_URL} target="_blank" rel="noreferrer">
+          acceptable-use policy
+        </a>
+        .
+      </p>
     </section>
   );
 }

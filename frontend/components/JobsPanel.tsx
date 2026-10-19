@@ -23,7 +23,7 @@ export default function JobsPanel({ jobs, locked, onCancel, onRetry }: Props) {
       {jobs.map((j) => (
         <div key={j.id} className="job">
           <div>
-            <b>
+            <b className={j.status === 'refused' ? 'refused' : ''}>
               {labels[j.kind] || j.kind} · {j.status}
             </b>
             <p>{j.stage}</p>
