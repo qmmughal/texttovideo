@@ -97,7 +97,8 @@ export default function Editor(props: Props) {
             </div>
             <div className="preview" style={{ aspectRatio: `${options.width}/${options.height}`, maxHeight: 420 }}>
               {preview ? (
-                <video controls src={assetUrl(preview)} />
+                // Start on a frame past the opening fade so the preview is not a black box.
+                <video controls preload="metadata" src={assetUrl(preview) + '#t=0.8'} />
               ) : (
                 <div>
                   <span>▷</span>
