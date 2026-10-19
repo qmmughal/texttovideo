@@ -51,7 +51,9 @@ export type Settings = {
   clip_seconds: number;
   threads: number;
   font: string;
-  tts: 'piper' | 'windows';
+  tts: 'builtin' | 'windows' | 'piper';
+  builtin_voice_en: string;
+  builtin_voice_ur: string;
   piper: string;
   voice: string;
   windows_voice: string;
@@ -83,6 +85,7 @@ export type ExportOptions = {
   caption_chars: number;
   caption_style: string;
   highlight: string;
+  formats: number[][];
 };
 
 export type OllamaModel = { name: string; capabilities?: string[] };
@@ -97,6 +100,10 @@ export type Status = {
   ollama: { online: boolean; data?: { models: OllamaModel[] } };
   comfy: { online: boolean; data?: { devices?: { name: string; vram_total: number }[] } };
 };
+
+export type Preset = { id: string; name: string; options: Partial<ExportOptions>; logo: string; music: string };
+
+export type VoiceModel = { key: string; name: string; language: string; license: string; size_mb: number; downloaded: boolean };
 
 export type ImageModel = { key: string; name: string; size_gb: number; license: string; downloaded: boolean };
 
@@ -120,6 +127,7 @@ export type Setup = {
   };
   ollama: { state: 'running' | 'installed' | 'missing'; models: string[] };
   voice: Status['voice'];
+  voices: { engine: boolean; catalog: VoiceModel[] };
   images: { engine: string; openvino: boolean; models: ImageModel[]; comfy: boolean };
   words: { whisper: boolean; size: string; downloaded: boolean };
   settings: { model: string; vision_model: string; tts: string };
@@ -127,7 +135,9 @@ export type Setup = {
 
 export const SYSTEM = '__system__';
 
-const API = 'http://127.0.0.1:8000/api';
+// Served by the backend in normal use; the Next dev server on port 3000 talks to the backend directly.
+const API =
+  typeof window !== 'undefined' && window.location.port === '3000' ? 'http://127.0.0.1:8000/api' : '/api';
 
 export const assetUrl = (name: string) => `${API}/assets/${name}`;
 
@@ -194,6 +204,7 @@ export const defaultExport: ExportOptions = {
   caption_chars: 84,
   caption_style: 'blocks',
   highlight: '#ffd23f',
+  formats: [],
 };
 
 export const formats = [

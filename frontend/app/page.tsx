@@ -14,6 +14,7 @@ import {
   newScene,
   uploadFile,
   SYSTEM,
+  type Preset,
   type Setup,
   type Job,
   type Project,
@@ -45,6 +46,7 @@ export default function Studio() {
   const [options, setOptions] = useState(defaultExport);
   const [preview, setPreview] = useState('');
   const [setup, setSetup] = useState<Setup | null>(null);
+  const [presets, setPresets] = useState<Preset[]>([]);
 
   const active = jobs.find((j) => j.project === project?.id && ACTIVE.includes(j.status));
   const locked = busy || !!active;
@@ -84,6 +86,7 @@ export default function Studio() {
       });
       setStatus(await call('/status'));
       setSetup(await call('/setup'));
+      setPresets(await call('/presets'));
     });
   }, []);
 
@@ -260,6 +263,35 @@ export default function Studio() {
     });
   }
 
+  async function translate(p: Project) {
+    const language = p.language === 'ur' ? 'en' : 'ur';
+    await guard(async () => {
+      const result = await call<{ project: Project }>(`/projects/${p.id}/translate`, 'POST', { language });
+      await refresh();
+      setProject(result.project);
+      setPreview('');
+      setDirty(false);
+      setTab('editor');
+      setNotice(`Translating into ${language === 'ur' ? 'Urdu' : 'English'}. Voice and render the copy when it finishes.`);
+    });
+  }
+
+  async function savePreset(name: string) {
+    if (!project) return;
+    await guard(async () => {
+      await call('/presets', 'POST', { name, options, logo: project.logo, music: project.music });
+      setPresets(await call('/presets'));
+      setNotice(`Saved the look “${name}”.`);
+    });
+  }
+
+  async function deletePreset(preset: Preset) {
+    await guard(async () => {
+      await call(`/presets/${preset.id}`, 'DELETE');
+      setPresets(await call('/presets'));
+    });
+  }
+
   const projectJobs = jobs.filter((j) => j.project === project?.id).slice(0, 3);
 
   return (
@@ -313,6 +345,7 @@ export default function Studio() {
             onOpen={open}
             onDuplicate={duplicate}
             onDelete={remove}
+            onTranslate={translate}
           />
         )}
         {tab === 'wizard' && project && (
@@ -353,6 +386,9 @@ export default function Studio() {
             }
             onJob={job}
             onUpload={upload}
+            presets={presets}
+            onSavePreset={savePreset}
+            onDeletePreset={deletePreset}
           />
         )}
         {tab === 'settings' && settings && (

@@ -1,4 +1,4 @@
-import { assetUrl, isImage, newScene, type ExportOptions, type Project, type Scene } from '../lib/api';
+import { assetUrl, isImage, newScene, type ExportOptions, type Preset, type Project, type Scene } from '../lib/api';
 import ExportPanel from './ExportPanel';
 import SceneCard from './SceneCard';
 
@@ -16,6 +16,9 @@ type Props = {
   onSave: () => void;
   onJob: (kind: string, extra?: object) => void;
   onUpload: (file: File | undefined, apply: (name: string) => void) => void;
+  presets: Preset[];
+  onSavePreset: (name: string) => void;
+  onDeletePreset: (preset: Preset) => void;
 };
 
 export default function Editor(props: Props) {
@@ -114,6 +117,9 @@ export default function Editor(props: Props) {
             update={update}
             onUpload={onUpload}
             onRender={() => onJob('render')}
+            presets={props.presets}
+            onSavePreset={props.onSavePreset}
+            onDeletePreset={props.onDeletePreset}
           />
           {project.exports.length > 0 && (
             <div className="panel">

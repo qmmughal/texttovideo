@@ -146,16 +146,38 @@ export default function SettingsView({ settings, status, workflow, busy, setSett
         <label>
           Narration engine
           <select value={settings.tts} onChange={(e) => set({ tts: e.target.value as Settings['tts'] })}>
+            <option value="builtin">Built-in neural voices · English & Urdu (download in Setup check)</option>
             <option value="windows" disabled={status ? !status.windows : false}>
-              Windows built-in voices (no install)
+              Windows system voices (no download)
             </option>
-            <option value="piper">Piper neural voices</option>
+            <option value="piper">Piper command-line (advanced)</option>
           </select>
         </label>
-        {settings.tts === 'windows' ? (
+        {settings.tts === 'builtin' && (
           <div className="form-grid">
+            {(['en', 'ur'] as const).map((language) => {
+              const field = language === 'en' ? 'builtin_voice_en' : 'builtin_voice_ur';
+              const options = (status?.voice?.engine === 'builtin' ? status.voice.voices : []).filter((v) => v.language === language);
+              return (
+                <label key={language}>
+                  {language === 'en' ? 'English voice' : 'Urdu voice'}
+                  <select value={settings[field]} onChange={(e) => set({ [field]: e.target.value })}>
+                    {!options.some((v) => v.name === settings[field]) && <option value={settings[field]}>{settings[field]} (not downloaded)</option>}
+                    {options.map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        {settings.tts === 'windows' && (
+          <>
             <label>
-              Voice
+              Windows voice
               <select value={settings.windows_voice} onChange={(e) => set({ windows_voice: e.target.value })}>
                 <option value="">Automatic (matches project language)</option>
                 {voices.map((v) => (
@@ -165,18 +187,10 @@ export default function SettingsView({ settings, status, workflow, busy, setSett
                 ))}
               </select>
             </label>
-            <label>
-              Speaking rate · {settings.voice_rate}
-              <input
-                type="range"
-                min="-10"
-                max="10"
-                value={settings.voice_rate}
-                onChange={(e) => set({ voice_rate: +e.target.value })}
-              />
-            </label>
-          </div>
-        ) : (
+            <p className="muted small">Urdu projects use a downloaded built-in Urdu voice automatically when Windows has none.</p>
+          </>
+        )}
+        {settings.tts === 'piper' ? (
           <>
             <label>
               Piper executable path
@@ -187,6 +201,17 @@ export default function SettingsView({ settings, status, workflow, busy, setSett
               <input value={settings.voice} onChange={(e) => set({ voice: e.target.value })} />
             </label>
           </>
+        ) : (
+          <label>
+            Speaking rate · {settings.voice_rate}
+            <input
+              type="range"
+              min="-10"
+              max="10"
+              value={settings.voice_rate}
+              onChange={(e) => set({ voice_rate: +e.target.value })}
+            />
+          </label>
         )}
         <p className="muted small">
           {status?.voice?.engine === settings.tts

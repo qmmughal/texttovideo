@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -37,3 +37,56 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+
+  scripts:
+    # The Linux/macOS setup script installs, builds, and serves the UI from the backend.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: ./setup.sh
+      - run: |
+          .venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 &
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:8000/api/settings >/dev/null && break; sleep 1; done
+          curl -fs http://127.0.0.1:8000/ | grep -qi "frame"
+          curl -fs http://127.0.0.1:8000/api/projects | grep -q "sample"
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t frame:ci .
+      - run: |
+          docker run -d --name frame -p 127.0.0.1:8000:8000 frame:ci
+          for i in $(seq 1 60); do curl -fs http://127.0.0.1:8000/api/settings >/dev/null && break; sleep 1; done
+          curl -fs http://127.0.0.1:8000/ | grep -qi "frame"
+          curl -fs http://127.0.0.1:8000/api/setup | grep -q "hardware"
+          docker logs frame
+
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci && npm run build
+        working-directory: frontend
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" } else { $iscc = $iscc.Source }
+          & $iscc /DAppVersion=ci installer\frame.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Frame-Setup
+          path: dist/*.exe

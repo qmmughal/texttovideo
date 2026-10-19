@@ -9,7 +9,11 @@ A working Next.js/TypeScript editor with a FastAPI background worker, SQLite pro
 - **Works without a graphics card:** a setup check sizes models to your computer, and AI images can be drawn on the CPU.
 - **Idea → film:** a local Ollama model writes a scene-by-scene storyboard in English or Urdu.
 - **Photos → film:** upload your photos and a local vision model (e.g. `qwen3-vl:8b`) writes narration for each one.
-- **Narration out of the box on Windows** using built-in system voices — no extra install. Piper neural voices are optional.
+- **Natural English and Urdu narration offline** with built-in neural voices on every OS, or Windows system voices with no download.
+- **Translate a project** between English and Urdu with your local language model, keeping the visuals.
+- **Brand presets** save your caption style, colours, transitions, logo and music as a reusable look.
+- **Render every social format in one go:** 9:16, 16:9, 1:1 and 4:5 from a single job.
+- **Runs on Windows, Linux, macOS, or Docker**, with a Windows installer.
 - **Motion and transitions:** per-scene zoom/pan (Ken Burns), crossfade, fade-through-black, or hard cuts.
 - **Word-synced captions:** short phrases appear as they are spoken, with the current word highlighted (exact timing with Windows voices; Whisper timing for uploaded or Piper narration). Sentence captions are also available. Full Urdu RTL shaping.
 - **Exports** for Shorts/Reels, YouTube, square, and portrait, with music ducking and logo placement.
@@ -67,7 +71,15 @@ The bundled Noto Naskh Arabic font is licensed separately under the
 Third-party dependencies and separately downloaded models retain their own
 licenses; the MIT license does not relicense them.
 
-## Windows quick start
+## Install
+
+Frame runs as one local server at **http://127.0.0.1:8000** (API documentation at `/docs`). It binds to this computer only. After installing, open **Setup check** in the sidebar to download models that suit your hardware.
+
+### Windows installer
+
+Download `Frame-Setup-<version>.exe` from the [Releases page](https://github.com/qmmughal/texttovideo/releases) and run it. It installs for the current user without administrator rights, installs Python 3.12 with winget if no Python 3.11+ is found, sets up the Python packages (a few minutes, once), and adds **Frame** to the Start menu. The shortcut starts the server and opens your browser; close its window to stop Frame. Uninstalling removes the program and its Python environment but keeps your projects in the install folder's `data` directory.
+
+### Windows from source
 
 Install Python 3.11+ and Node.js 22+. From PowerShell in this folder:
 
@@ -76,22 +88,26 @@ Install Python 3.11+ and Node.js 22+. From PowerShell in this folder:
 .\start.ps1
 ```
 
-Open **http://127.0.0.1:3000**. The backend runs at **http://127.0.0.1:8000** and API documentation at `/docs`. Both bind to loopback. Stop with Ctrl+C in the startup terminal. If PowerShell policy prevents running scripts, run the commands below individually rather than changing machine policy.
+`start.ps1` opens the browser when the server is ready; press Ctrl+C to stop. `.\start.ps1 -Dev` runs the hot-reloading interface on port 3000 for development. If PowerShell policy prevents running scripts, run `powershell -ExecutionPolicy Bypass -File .\setup.ps1` rather than changing machine policy.
 
-```powershell
-python -m venv .venv
-python -m pip --python .venv\Scripts\python.exe install -r backend\requirements.txt
-cd frontend
-npm ci
-cd ..
-.\.venv\Scripts\python -m scripts.sample
-# Terminal 1:
-.\.venv\Scripts\python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
-# Terminal 2, in frontend:
-npm run dev
+### Linux and macOS
+
+Install Python 3.11+ (with `venv`) and Node.js 22+, then:
+
+```sh
+./setup.sh
+./start.sh
 ```
 
-If `venv` reports an `ensurepip` error but creates its Python executable, the `python -m pip --python ...` command above can install dependencies into that environment using the main Python's pip. This was necessary on the development machine.
+Windows system voices are not available here; use the built-in neural voices from Setup check. Everything else works the same.
+
+### Docker
+
+```sh
+docker compose up -d
+```
+
+This builds Frame, starts it with an Ollama container, and publishes it on `127.0.0.1:8000` only. Projects and models are kept in Docker volumes. Install models from Setup check as usual; they download into the Ollama container. AI images and narration run on the CPU inside the container. To reach services by name, Frame accepts only the hosts listed in `FRAME_SERVICE_HOSTS` besides localhost.
 
 FFmpeg comes from the `imageio-ffmpeg` wheel, avoiding incompatible executables on PATH. To use another FFmpeg build, set `$env:FFMPEG_PATH='C:\tools\ffmpeg\bin\ffmpeg.exe'` before starting. H.264/AAC encoding must be available. No separate ffprobe installation is needed.
 
@@ -138,11 +154,22 @@ The adapter checks node types with `/object_info`, submits `/prompt`, polls `/hi
 
 ## Narration and captions
 
-Upload narration per scene, or generate it locally with one of two engines.
+Upload narration per scene, or generate it locally.
 
-**Windows built-in voices** need no install. In **Models & settings**, set **Narration engine** to Windows, then choose a voice (or leave it automatic to match the project language) and a speaking rate. Narration uses the System.Speech API through PowerShell; text is passed through a temporary UTF-8 file, never a command line. Windows ships English voices by default. For Urdu, add an Urdu voice under Windows **Settings → Time & language → Speech**, if one is available for your Windows edition, or upload narration.
+**Built-in neural voices** work on every operating system. Download them from Setup check (about 80 MB each). They are [Piper](https://github.com/OHF-Voice/piper1-gpl) voices run in-process by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), and only voices whose training data allows commercial use are offered:
 
-**Piper** is optional and gives more natural neural voices. Configure the [Piper CLI](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/CLI.md) and a local voice:
+| Voice | Language | Licence |
+| --- | --- | --- |
+| Joe | US English, male | CC0 |
+| Cori | UK English, female | public domain |
+| Alba | Scottish English, female | CC BY 4.0 |
+| Fasih | Urdu, male | MIT |
+
+Choose the English and Urdu voice under **Models & settings**. When a speech model for word timing is installed, narration from these voices is word-timed automatically.
+
+**Windows system voices** need no download. In **Models & settings**, set **Narration engine** to Windows, then choose a voice (or leave it automatic to match the project language) and a speaking rate. Narration uses the System.Speech API through PowerShell; text is passed through a temporary UTF-8 file, never a command line. Windows ships English voices by default. Urdu projects automatically use the built-in Urdu voice when it is downloaded and Windows has none.
+
+**Piper command line** remains available for advanced users who want other Piper voices. Configure the [Piper CLI](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/CLI.md) and a local voice:
 
 ```powershell
 # Use a Python environment supported by piper-tts (a separate Python 3.11/3.12 environment may be needed).
@@ -159,7 +186,17 @@ Choose **Caption style** in export settings:
 - **Word-synced:** short phrases of up to five words appear as they are spoken, with the current word in the highlight colour. Windows voices report exact word timings while speaking. For uploaded or Piper narration, download the Whisper speech model in Setup check and use **Time captions to voice**; a scene with narration but no script gets its caption filled in from what was said. Without timings, words are spread evenly over the narration. Urdu phrases are shown whole without per-word colouring, to keep letters joined.
 - **Sentences:** each scene has one narration asset. Long scene text is split into several caption cues (set **Characters per caption** in export settings), preferring sentence boundaries. Each cue's screen time is proportional to its length, and the SRT file uses the same cues. Cues are not word-aligned to the narration. Uploaded clip audio is intentionally replaced by the narration/music mix; upload any dialogue you want to preserve as narration.
 
+## Translate a project
+
+On a project card, choose **اردو copy** (or **English copy** for an Urdu project). Frame makes a copy, and your storyboard model translates every caption, the title, and the description. Visuals and visual prompts are kept; narration is cleared because it belongs to the old language, so generate voices for the copy. Urdu translations must come back in Urdu script; a reply in Roman Urdu is retried once and otherwise reported, so choose a larger model if that happens.
+
+## Brand presets
+
+In export settings, **Save look** stores the caption style and colours, highlight colour, transition, safe area, music volume, logo, and music under a name. **Brand preset** applies a saved look to any project. Saving under an existing name updates that preset. Media used by a preset is never removed when a project is deleted.
+
 ## Rendering and editing
+
+- **Also render** in export settings adds other social formats to the same job: one click produces the current format plus any of 9:16, 16:9, 1:1, and 4:5. Caption size is scaled to each frame.
 
 - Reorder, add, delete, edit, upload, and individually regenerate or re-voice scenes. Save before leaving the editor. Generation also saves current edits first.
 - Duplicate a project to try a variation; delete removes the project, its jobs, and any media no other project uses.
@@ -192,7 +229,7 @@ cd ..
 .\.venv\Scripts\python -m scripts.verify_live
 ```
 
-GitHub Actions runs the backend tests on Ubuntu and Windows plus the frontend typecheck and build on every push. The Windows voice test runs only where a system voice is installed.
+GitHub Actions runs the backend tests on Ubuntu, Windows, and macOS; the frontend typecheck and build; the Linux setup script; a Docker build and smoke test; and the Windows installer build (downloadable from the run). Pushing a tag such as `v1.2.0` publishes the installer on a GitHub release. The Windows voice test runs only where a system voice is installed.
 
 `verify_live` requires installed `llama3.2:1b`, runs a real Ollama storyboard, renders the sample images with crossfades, and saves an `ollama-verified` project. It selects that model in settings and resets the hand-drawn sample. Test data lives under `data/test-runs`, separate from normal projects.
 
@@ -202,4 +239,4 @@ Not verified with real model inference here: ComfyUI image/video generation (ser
 
 ## Source map
 
-`frontend/app/page.tsx`: dashboard, wizard, storyboard, settings, jobs, exports. `frontend/app/style.css`: responsive UI. `backend/main.py`: API and background jobs. `backend/models.py`: validation. `backend/store.py`: SQLite and safe asset paths. `backend/integrations.py`: Ollama, ComfyUI, Piper. `backend/media.py`: caption shaping, FFmpeg rendering, audio mixing, SRT. `tests/test_studio.py`: focused real-media and failure checks.
+`frontend/app/page.tsx`: app state and actions. `frontend/components/`: dashboard, wizard, editor, scene cards, export panel, setup check, settings, jobs. `frontend/lib/api.ts`: API client and types. `backend/main.py`: API, setup and background jobs. `backend/models.py`: validation. `backend/store.py`: SQLite and safe asset paths. `backend/integrations.py`: Ollama storyboards, photo narration, translation, ComfyUI, narration engines. `backend/media.py`: captions, motion, transitions, FFmpeg rendering, audio mixing, SRT. `backend/words.py`: word timing and Whisper alignment. `backend/cpu_images.py`: OpenVINO image generation. `backend/voices.py`: built-in neural voices. `backend/hub.py`: resumable model downloads. `backend/system.py`: hardware detection and recommendations. `installer/`: Windows installer. `tests/test_studio.py`: real-media and failure checks.

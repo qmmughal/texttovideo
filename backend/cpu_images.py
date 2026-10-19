@@ -3,16 +3,14 @@
 Models are pre-converted OpenVINO repositories on Hugging Face, downloaded once into data/models.
 """
 
-import re
 import secrets
 import threading
 
-import httpx
 from PIL import Image
 
-from .store import ROOT, asset_path, uid
+from . import hub
+from .store import asset_path, uid
 
-MODELS_DIR = ROOT / "models"
 CATALOG = {
     "lcm-dreamshaper": {
         "repo": "OpenVINO/LCM_Dreamshaper_v7-int8-ov",
@@ -25,8 +23,6 @@ CATALOG = {
         "license": "MIT",
     },
 }
-HF = "https://huggingface.co"
-
 _pipelines = {}
 _load_lock = threading.Lock()
 
@@ -40,59 +36,20 @@ def available():
 def model_dir(key):
     if key not in CATALOG:
         raise ValueError(f"Unknown image model: {key}")
-    return MODELS_DIR / re.sub(r"[^A-Za-z0-9_.-]", "_", CATALOG[key]["repo"])
+    return hub.folder_for(CATALOG[key]["repo"])
 
 
 def is_downloaded(key):
-    folder = model_dir(key)
-    return (folder / ".complete").is_file()
+    return key in CATALOG and hub.is_downloaded(CATALOG[key]["repo"])
 
 
 def model_status():
-    return [
-        {"key": key, **info, "downloaded": is_downloaded(key)}
-        for key, info in CATALOG.items()
-    ]
+    return [{"key": key, **info, "downloaded": is_downloaded(key)} for key, info in CATALOG.items()]
 
 
 def download(key, cancelled, progress, client=None):
-    """Fetch every file of a model repository with resumable, cancellable progress."""
-    repo = CATALOG.get(key, {}).get("repo") or ""
-    folder = model_dir(key)
-    folder.mkdir(parents=True, exist_ok=True)
-    own_client = client is None
-    client = client or httpx.Client(timeout=httpx.Timeout(60, read=300), trust_env=True, follow_redirects=True)
-    try:
-        listing = client.get(f"{HF}/api/models/{repo}/tree/main", params={"recursive": "true"})
-        listing.raise_for_status()
-        skip = (".", *CATALOG[key].get("skip", ()))
-        files = [f for f in listing.json() if f["type"] == "file" and not f["path"].startswith(skip)]
-        total = sum(f.get("size", 0) for f in files) or 1
-        done = 0
-        for file in files:
-            target = (folder / file["path"]).resolve()
-            if folder.resolve() not in target.parents:
-                raise ValueError("Unsafe file path in model repository")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.is_file() and target.stat().st_size == file.get("size"):
-                done += file.get("size", 0)
-                continue
-            partial = target.with_name(target.name + ".part")
-            with client.stream("GET", f"{HF}/{repo}/resolve/main/{file['path']}") as response:
-                response.raise_for_status()
-                with partial.open("wb") as out:
-                    for chunk in response.iter_bytes(1024 * 1024):
-                        if cancelled():
-                            raise RuntimeError("Cancelled. Downloaded files are kept and the next attempt resumes.")
-                        out.write(chunk)
-                        done += len(chunk)
-                        progress(f"Downloading {CATALOG[key]['name']} · {done / 1024**3:.2f} of {total / 1024**3:.2f} GB",
-                                 min(done / total * 100, 99.9))
-            partial.replace(target)
-        (folder / ".complete").write_text(repo, encoding="utf-8")
-    finally:
-        if own_client:
-            client.close()
+    info = CATALOG[key]
+    hub.download(info["repo"], info["name"], cancelled, progress, info.get("skip", ()), client)
 
 
 def pipeline(key, device):
